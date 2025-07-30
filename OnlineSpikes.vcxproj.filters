@@ -1,0 +1,204 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\NetClient\NetClient.cpp" />
+    <ClCompile Include="src\NetClient\Socket.cpp">
+      <Filter>Networking</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Networking\Sock.cpp">
+      <Filter>Networking</Filter>
+    </ClCompile>
+    <ClCompile Include="External\libsvm\svm.cpp" />
+    <ClCompile Include="src\Networking\NetworkHelpers.cpp" />
+    <ClCompile Include="External\ImGUI\imgui.cpp" />
+    <ClCompile Include="External\ImGUI\imgui_draw.cpp" />
+    <ClCompile Include="External\ImGUI\imgui_impl_dx12.cpp" />
+    <ClCompile Include="External\ImGUI\imgui_impl_win32.cpp" />
+    <ClCompile Include="External\ImGUI\imgui_tables.cpp" />
+    <ClCompile Include="External\ImGUI\imgui_widgets.cpp" />
+    <ClCompile Include="External\ImGUI\implot.cpp" />
+    <ClCompile Include="External\ImGUI\implot_items.cpp" />
+    <ClCompile Include="External\ImGUI\imgui_stdlib.cpp" />
+    <ClCompile Include="External\CNPY\cnpy.cpp">
+      <Filter>External Code\Code</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Decoder\Decoder.cpp" />
+    <ClCompile Include="src\Decoder\dataBinner.cpp" />
+    <ClCompile Include="src\Helpers\FileWriter.cpp">
+      <Filter>Helpers</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Helpers\GuiHelpers.cpp" />
+    <ClCompile Include="src\Gui\InputGui.cpp" />
+    <ClCompile Include="src\Gui\Gui.cpp" />
+    <ClCompile Include="src\SpikeSorter\dataSocket.cpp" />
+    <ClCompile Include="src\SpikeSorter\SorterHelpers.cpp">
+      <Filter>Input</Filter>
+    </ClCompile>
+    <ClCompile Include="External\tinyfiledialogs\tinyfiledialogs.c" />
+    <ClCompile Include="src\Helpers\TimeHelpers.cpp">
+      <Filter>Helpers</Filter>
+    </ClCompile>
+    <ClCompile Include="External\sglx\SglxCppClient.cpp" />
+    <ClCompile Include="src\SpikeGLX-CPP-SDK-main\SpikeGLX-CPP-SDK-main\API\SglxCppClient.cpp" />
+    <ClCompile Include="src\SpikeSorter\mockStreamDataSocket.cpp" />
+    <ClCompile Include="src\SpikeSorter\ThresholdCrossing.cpp" />
+    <ClCompile Include="src\Decoder\BaseModel.cpp" />
+    <ClCompile Include="src\Decoder\SVMModel.cpp" />
+    <ClCompile Include="src\Decoder\RegressionModel.cpp" />
+    <ClCompile Include="src\Networking\FragmentManager.cpp" />
+    <ClCompile Include="src\Decoder\SKLearnModel.cpp" />
+    <ClCompile Include="src\Gui\OutputGuiTab.cpp" />
+    <ClCompile Include="src\Gui\OutputGui.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\NetClient\NetClient.h" />
+    <ClInclude Include="src\NetClient\Socket.h">
+      <Filter>Networking</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
+      <Filter>Misc</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Networking\inputParameters.h">
+      <Filter>Networking</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Networking\onlineSpikesPayload.h">
+      <Filter>Networking</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Networking\sorterParameters.h">
+      <Filter>Networking</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Networking\Sock.h">
+      <Filter>Networking</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Networking\NetworkHelpers.h" />
+    <ClInclude Include="src\Networking\SerializationHelpers.h" />
+    <ClInclude Include="External\libsvm\svm.h" />
+    <ClInclude Include="External\ImGUI\imconfig.h" />
+    <ClInclude Include="External\ImGUI\imgui.h" />
+    <ClInclude Include="External\ImGUI\imgui_impl_dx12.h" />
+    <ClInclude Include="External\ImGUI\imgui_impl_win32.h" />
+    <ClInclude Include="External\ImGUI\imgui_internal.h" />
+    <ClInclude Include="External\ImGUI\implot.h" />
+    <ClInclude Include="External\ImGUI\implot_internal.h" />
+    <ClInclude Include="External\ImGUI\imstb_rectpack.h" />
+    <ClInclude Include="External\ImGUI\imstb_textedit.h" />
+    <ClInclude Include="External\ImGUI\imstb_truetype.h" />
+    <ClInclude Include="External\ImGUI\imgui_stdlib.h" />
+    <ClInclude Include="External\CNPY\cnpy.h">
+      <Filter>External Code\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Decoder\Decoder.h" />
+    <ClInclude Include="src\Decoder\dataBinner.h" />
+    <ClInclude Include="src\SpikeSorter\myCudnnConvolution.h" />
+    <ClInclude Include="src\SpikeSorter\myGPUhelpers.h">
+      <Filter>Helpers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Helpers\FileWriter.h">
+      <Filter>Helpers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Helpers\TimeHelpers.h">
+      <Filter>Helpers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Helpers\Utils.h">
+      <Filter>Helpers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Helpers\GuiHelpers.h" />
+    <ClInclude Include="src\Gui\InputGui.h" />
+    <ClInclude Include="src\Gui\Gui.h" />
+    <ClInclude Include="src\SpikeSorter\dataSocket.h" />
+    <ClInclude Include="src\SpikeSorter\SorterHelpers.h">
+      <Filter>Input</Filter>
+    </ClInclude>
+    <ClInclude Include="External\tinyfiledialogs\tinyfiledialogs.h" />
+    <ClInclude Include="External\sglx\SglxApi.h" />
+    <ClInclude Include="External\sglx\SglxCppClient.h" />
+    <ClInclude Include="src\SpikeGLX-CPP-SDK-main\SpikeGLX-CPP-SDK-main\API\SglxApi.h" />
+    <ClInclude Include="src\SpikeGLX-CPP-SDK-main\SpikeGLX-CPP-SDK-main\API\SglxCppClient.h" />
+    <ClInclude Include="src\SpikeSorter\ThresholdCrossing.h" />
+    <ClInclude Include="src\SpikeSorter\mockStreamDataSocket.h" />
+    <ClInclude Include="src\Decoder\BaseModel.h" />
+    <ClInclude Include="src\Decoder\SVMModel.h" />
+    <ClInclude Include="src\Decoder\RegressionModel.h" />
+    <ClInclude Include="src\Networking\FragmentManager.h" />
+    <ClInclude Include="src\Decoder\SKLearnModel.h" />
+    <ClInclude Include="src\SpikeSorter\OnlineSpikesV2.h" />
+    <ClInclude Include="src\SpikeSorter\OnlineSpikesV2MemoryList.h" />
+    <ClInclude Include="src\SpikeSorter\myCublasError.h" />
+    <ClInclude Include="src\SpikeSorter\TensorWrapper.h" />
+    <ClInclude Include="src\Gui\OutputGuiTab.h" />
+    <ClInclude Include="src\Gui\OutputGui.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="OnlineSpikes.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="External Code">
+      <UniqueIdentifier>{b2dbd02c-d6b6-46f2-b616-ef2bd585ec27}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="External Code\Headers">
+      <UniqueIdentifier>{9c9aa632-75fa-4adb-a974-8f5b8a2646d4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="External Code\Code">
+      <UniqueIdentifier>{36e5056d-acf8-4e65-83c9-b251162a5852}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="External Code\ImGUI">
+      <UniqueIdentifier>{48ce5948-0900-49c1-bc66-9731c75900f5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Helpers">
+      <UniqueIdentifier>{00aff776-d97d-4fa9-8947-fc1c1e37d5f5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Networking">
+      <UniqueIdentifier>{2e865922-a339-48bd-a035-d22265ef1cf6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="StateDisplayer">
+      <UniqueIdentifier>{395fff34-cefd-4332-aaef-26f46b0bcd4c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Input">
+      <UniqueIdentifier>{a54a4c83-9a3f-42f1-a453-a634cd104e54}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Misc">
+      <UniqueIdentifier>{0a61dcc8-a258-4c7e-9b2a-86be8e071677}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="src\SpikeSorter\myCudnnConvolution.cu" />
+    <CudaCompile Include="src\SpikeSorter\myGPUhelpers.cu">
+      <Filter>Helpers</Filter>
+    </CudaCompile>
+    <CudaCompile Include="src\SpikeSorter\OnlineSpikesV2.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="src\Matlab\configFile384.m" />
+    <None Include="src\Matlab\cropAndSort.m" />
+    <None Include="src\Matlab\udpTest.m" />
+    <None Include="src\Matlab\cropSpikeSorterInput.m" />
+    <None Include="src\Matlab\extractDecodeLabels.m" />
+    <None Include="src\Matlab\neuropixPhase3A_kilosortChanMap.mat" />
+    <None Include="External\ImGUI\imgui.ini" />
+    <None Include="src\Matlab\splitTrainTest.m" />
+    <None Include="src\Matlab\cropBin.m" />
+    <None Include="src\Matlab\DataBinner.m" />
+    <None Include="src\Matlab\getBestKMask.m" />
+    <None Include="src\Matlab\libsvmread.mexw64" />
+    <None Include="src\Matlab\libsvmwrite.mexw64" />
+    <None Include="src\Matlab\svmpredict.mexw64" />
+    <None Include="src\Matlab\svmtrain.mexw64" />
+    <None Include="src\Matlab\main_kilosort3.m" />
+    <None Include="README.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <Font Include="External\ImGUI\fonts\Cousine-Regular.ttf" />
+    <Font Include="External\ImGUI\fonts\DroidSans.ttf" />
+    <Font Include="External\ImGUI\fonts\Karla-Regular.ttf" />
+    <Font Include="External\ImGUI\fonts\ProggyClean.ttf" />
+    <Font Include="External\ImGUI\fonts\ProggyTiny.ttf" />
+    <Font Include="External\ImGUI\fonts\Roboto-Medium.ttf" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="src\ExtraFiles\brain.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <Library Include="External\sglx\libSglxApi.a" />
+  </ItemGroup>
+</Project>
