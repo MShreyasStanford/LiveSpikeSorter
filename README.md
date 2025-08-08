@@ -14,20 +14,32 @@ If you want more information regarding the parameters used, visit the [wiki](htt
 
 ### Windows
 
-We recommend using Visual Studio 2017 and CUDA 11.3. On this it has been heavily tested, but upgrading should be no problem as long as there are no syntax changes.
-We also recommend taking the Visual Studio solution and changing paths to the correct position. You can also use Cmake.
+Build by first configuring the Makefile by modifying the following:
 
-Download CUDA 11.3 (or higher) and set the paths in your environment.
-Add the cudnn.h package/extension [here](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#prerequisites-windows), follow the instructions.
+* CUDA_PATH: the location of your CUDA installation
+* CUDA_VERSION: version number of your CUDA installation
+* PYTHON_PATH: path to your Python installation (used for our C++ scikit-learn wrapper for decoding)
+* NUMPY_PATH: path to your NumPy package installation in Python
+* WINSDK_INCLUDE_DIR, WINSDK_LIB_DIR: paths to the /Include/<version>/um and /Lib/<version>/um/<architecture> paths of your Windows SDK installation
+* SGLX_API_DIR, SGLX_LIB_DIR: we have it as absolute paths right now (TODO: change to relative)
 
-And build the Solution
+Ensure the following .dll's are in the same directory as the application executable:
+* cudnn_cnn_infer64_8.dll
+* cudnn_ops_infer64_8.dll
+* libgcc_s_seh-1.dll
+* libstdc++-6.dll
+* libwinpthread-1.dll
 
-##### Common Installation Errors
+Additionally, ensure all necessary .dll's are in $(CUDA_PATH)/bin.
 
-A common error that can occur when opening the visual studio file in the git is that it cannot find the CUDA props file and thus cannot open the project. This can be fixed by doing [this](https://forums.developer.nvidia.com/t/cannot-run-samples-on-ms-visual-studi-2019/72472).
+Then, simply build with
+```console
+foo@bar:~$ make
+```
 
-If you get an error which is along the line of 'can't find 'rc.exe'' you have to use the 8.1 SDK, or copy the 'rc.exe' and
-its corresponding '.dll' file to your Microsoft Kits bin file.
+We have only tested the installation with the MSVC compiler and linker (cl.exe). We have not tested compilation of this project under any standard other than C++17.
+
+We recommend using MSVC 2017 and CUDA 11.3. On this it has been heavily tested.
 
 
 ### Linux
@@ -41,5 +53,7 @@ This program did once work on Linux, however it has not been tested in a while. 
 As SpikeGLX is unavailable for Mac this cannot be used as a spike sorter. However, it can be used for the GUI.
 
 
+## Running spike sorting pipeline
 
+TODO: Talk about modified Kilosort.
 
