@@ -85,9 +85,3 @@ LSS includes an optional real-time decoder that trains a classifier on spike dat
 3. The decoder will train online and begin producing predictions in real time.
 
 The SDM (Stimulus Display Machine) integration allows LSS to send decoded output over TCP to a separate machine for closed-loop stimulus control.
-
-## Citation
-
-If you use this software, please cite the Kilosort4 paper:
-
-> Pachitariu, M., Sridhar, S., Pennington, J., & Stringer, C. (2024). Spike sorting with Kilosort4. *Nature Methods*, 21, 914–921. https://doi.org/10.1038/s41592-024-02232-7
