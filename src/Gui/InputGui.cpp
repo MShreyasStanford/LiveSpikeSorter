@@ -57,6 +57,15 @@ InputGUI::InputGUI(InputParameters cmdLineParams)
 
 	Params.sdmIP = cmdLineParams.sdmIP;
 	Params.sdmPort = cmdLineParams.sdmPort;
+	Params.vSdmActivitySubset = cmdLineParams.vSdmActivitySubset;
+	Params.sdmTriggerZ = cmdLineParams.sdmTriggerZ;
+	Params.sdmBaselineMinSeconds = cmdLineParams.sdmBaselineMinSeconds;
+	Params.sdmTriggerBinMs = cmdLineParams.sdmTriggerBinMs;
+	Params.sdmProcessorType = cmdLineParams.sdmProcessorType;
+	Params.sSdmSpikesFile = cmdLineParams.sSdmSpikesFile;
+	Params.sSdmEventFile = cmdLineParams.sSdmEventFile;
+	Params.sSdmDecoderWorkFolder = cmdLineParams.sSdmDecoderWorkFolder;
+	Params.sdmDecoderWindowMs = cmdLineParams.sdmDecoderWindowMs;
 
 	/* -------- device selection -------- */
 	Params.vSelectedDevices = cmdLineParams.vSelectedDevices;
@@ -423,6 +432,37 @@ void InputGUI::gatherDecoderParameters() {
 
 		ImGui::Checkbox("Send feedback", &Params.bIsSendingFeedback);
 	}
+
+	if (ImGui::CollapsingHeader("SDM Processor")) {
+		ImGui::Text("SDM Processor Type:");
+		ImGui::SameLine(); HelpMarker("Select the SDM processing strategy: 'zscore' for z-score baseline, 'logreg' for logistic regression, 'bincounts' for raw per-channel spike counts over TCP.");
+		bool isZscore = (Params.sdmProcessorType == "zscore");
+		bool isLogreg = (Params.sdmProcessorType == "logreg");
+		bool isBincounts = (Params.sdmProcessorType == "bincounts");
+		if (ImGui::RadioButton("Z-Score", isZscore)) Params.sdmProcessorType = "zscore";
+		ImGui::SameLine();
+		if (ImGui::RadioButton("Logistic Regression", isLogreg)) Params.sdmProcessorType = "logreg";
+		ImGui::SameLine();
+		if (ImGui::RadioButton("Bin Counts", isBincounts)) Params.sdmProcessorType = "bincounts";
+
+		if (Params.sdmProcessorType == "logreg") {
+			ImGui::Text("SDM Training Spikes File:");
+			ImGui::SameLine(); HelpMarker("Spike output file from a prior recording session (CSV: time,channel,amplitude).");
+			InputTextWithFileDialog("##SdmSpikesFile", &Params.sSdmSpikesFile, "Select##sdmSpikesButton", Params.sDecoderWorkFolder.c_str(), 1, txtFilterPattern, 0);
+
+			ImGui::Text("SDM Training Event File:");
+			ImGui::SameLine(); HelpMarker("Event file with labels (space-separated: time label, label = 0 or 1).");
+			InputTextWithFileDialog("##SdmEventFile", &Params.sSdmEventFile, "Select##sdmEventButton", Params.sDecoderWorkFolder.c_str(), 1, txtFilterPattern, 0);
+
+			ImGui::Text("SDM Decoder Work Folder:");
+			ImGui::SameLine(); HelpMarker("Folder for intermediate SDM decoder files.");
+			InputTextWithFileDialog("##SdmWorkFolder", &Params.sSdmDecoderWorkFolder, "Select##sdmWorkButton", Params.sDecoderWorkFolder.c_str(), NULL, NULL, NULL, true);
+
+			ImGui::Text("SDM Decoder Window (ms):");
+			ImGui::SameLine(); HelpMarker("Window length in milliseconds for the logistic regression feature vector.");
+			ImGui::InputInt("##SdmDecoderWindowMs", &Params.sdmDecoderWindowMs);
+		}
+	}
 }
 
 
@@ -430,7 +470,7 @@ void InputGUI::gatherInputParameters(bool &finished, bool &isNetworking)
 {
 	// Input gpu, decoder, sorter parameters
 	ImGui::SetNextWindowSize({ 800,800 });
-	ImGui::Begin("OnlineSorter Input Interface", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
+	ImGui::Begin("Live Spike Sorter Input Interface", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
 	ImGui::PushItemWidth(780); // Set widget (text inputs) width
 
 	if (ImGui::CollapsingHeader("Data Accquisition Parameters")) 
@@ -443,14 +483,14 @@ void InputGUI::gatherInputParameters(bool &finished, bool &isNetworking)
 		gatherSorterParameters();
 
 	if (Params.vSelectedDevices.size() > 1 && Params.iSorterType == 0) {
-		if (ImGui::CollapsingHeader("Parallelized Online Sorter Parameters"))
+		if (ImGui::CollapsingHeader("Parallelized LSS Parameters"))
 			gatherParallelizedOSSInputs();
 	}
 
 	if (ImGui::CollapsingHeader("Decoder Parameters"))
 		gatherDecoderParameters();
 
-	if (ImGui::Button("Start Online Sorting", { 785,75 }))
+	if (ImGui::Button("Start Live Sorting", { 785,75 }))
 		finished = true;
 
 	ImGui::End();

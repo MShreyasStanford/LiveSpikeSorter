@@ -146,6 +146,10 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClCompile Include="src\SpikeGLX-CPP-SDK-main\SpikeGLX-CPP-SDK-main\API\SglxCppClient.cpp" />
     <ClCompile Include="src\SpikeSorter\dataSocket.cpp" />
     <ClCompile Include="src\Decoder\Decoder.cpp" />
+    <ClCompile Include="src\Decoder\SdmProcessor.cpp" />
+    <ClCompile Include="src\Decoder\ZScoreSdmProcessor.cpp" />
+    <ClCompile Include="src\Decoder\LogRegSdmProcessor.cpp" />
+    <ClCompile Include="src\Decoder\BinCountSdmProcessor.cpp" />
     <ClCompile Include="src\Helpers\FileWriter.cpp" />
     <ClCompile Include="src\Gui\Gui.cpp" />
     <ClCompile Include="src\Helpers\TimeHelpers.cpp" />
@@ -194,6 +198,10 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClInclude Include="src\SpikeGLX-CPP-SDK-main\SpikeGLX-CPP-SDK-main\API\SglxCppClient.h" />
     <ClInclude Include="src\SpikeSorter\dataSocket.h" />
     <ClInclude Include="src\Decoder\Decoder.h" />
+    <ClInclude Include="src\Decoder\SdmProcessor.h" />
+    <ClInclude Include="src\Decoder\ZScoreSdmProcessor.h" />
+    <ClInclude Include="src\Decoder\LogRegSdmProcessor.h" />
+    <ClInclude Include="src\Decoder\BinCountSdmProcessor.h" />
     <ClInclude Include="src\Helpers\FileWriter.h" />
     <ClInclude Include="src\Gui\Gui.h" />
     <ClInclude Include="src\Decoder\SVMModel.h" />
@@ -235,6 +243,7 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <None Include="src\Matlab\svmpredict.mexw64" />
     <None Include="src\Matlab\svmtrain.mexw64" />
     <None Include="src\Matlab\udpTest.m" />
+    <None Include="src\Matlab\sdm_bincounts_receiver.m" />
   </ItemGroup>
   <ItemGroup>
     <Font Include="External\ImGUI\fonts\Cousine-Regular.ttf" />

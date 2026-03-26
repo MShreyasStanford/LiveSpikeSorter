@@ -1,8 +1,10 @@
 #include "dataBinner.h"
+#include <cstdio>
+#include <cstring>
+#include <iostream>
 #include <thread>
-#include "Decoder.h"
-#include "../Networking/NetworkHelpers.h"
-#include "../Helpers/TimeHelpers.h"
+#include <vector>
+#include <map>
 
 DataBinner::DataBinner(int windowLength, int binLength, int windowOffset)
 	: windowLength(windowLength)
@@ -82,7 +84,8 @@ std::map<long, double> DataBinner::getDataWindow() {
 }
 
 
-void DataBinner::readInSpikes(const char* csvFilePath, const char* eventFilePath, const char* outputFilePath, FileWriter *m_fwOut) {
+void DataBinner::readInSpikes(const char* csvFilePath, const char* eventFilePath, const char* outputFilePath, FileWriter *m_fwOut,
+                              const std::unordered_set<long>* channelFilter) {
 	std::vector<long> times, channels;
 	std::cout << "Binner reading in from " << csvFilePath << " and " << eventFilePath << std::endl;
 	FILE *fpIn;
@@ -125,7 +128,9 @@ void DataBinner::readInSpikes(const char* csvFilePath, const char* eventFilePath
 				break;
 		}
 
-		// Insert time and channel
+		// Insert time and channel (skip if not in filter set)
+		if (channelFilter && channelFilter->find(channel) == channelFilter->end())
+			continue;
 		times.push_back(time);
 		channels.push_back(channel);
 	}

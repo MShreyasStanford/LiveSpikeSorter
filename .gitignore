@@ -261,7 +261,7 @@ __pycache__/
 *.pyc
 /src/Matlab/chanMap_20220819.mat
 /src/Matlab/test.m
-/src/Python
+#/src/Python
 
 # Temporary text files
 *.txt
@@ -274,4 +274,22 @@ doc/
 *.npz
 Python/
 
+!src/Python/
+!src/Python/run_online_spikes.py
 
+# Python virtual environment — exclude everything except the modified Kilosort package
+src/Python/run_online_spikes/*
+!src/Python/run_online_spikes/Lib/
+src/Python/run_online_spikes/Lib/*
+!src/Python/run_online_spikes/Lib/site-packages/
+src/Python/run_online_spikes/Lib/site-packages/*
+!src/Python/run_online_spikes/Lib/site-packages/kilosort/
+!src/Python/run_online_spikes/Lib/site-packages/kilosort-4.0.13.dist-info/
+src/Python/.ipynb_checkpoints/
+src/Python/run_phy/
+
+# Methods draft
+methods_section_draft.txt
+
+# Claude Code
+.claude/

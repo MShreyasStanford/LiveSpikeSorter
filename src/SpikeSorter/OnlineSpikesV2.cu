@@ -270,7 +270,8 @@ OnlineSpikesV2::OnlineSpikesV2(
 	ossOutputDir(params.sOSSOutputFolder),
 	spikesFileOut(ossOutputDir + "spikeOutput.txt"),
 	recordingOffset(0),
-	substream(params.iSubstream)
+	substream(params.iSubstream),
+	lookback(0) // this will be set when we read in M
 {
 	static const char *ptLabel = { "OnlineSpikesV2::OnlineSpikesV2" };
 
@@ -427,7 +428,7 @@ void OnlineSpikesV2::loadTemplatesShape(std::string filepath)
 	T = npTemplates.shape[0];
 	M = npTemplates.shape[1];
 	C = (npTemplates.shape.size() == 3) ? npTemplates.shape[2] : 1;
-
+	lookback = 2 * M;
 }
 
 // TODO: Make this more "conventional"... idk put everything into a JSON instead of a text file or soemthing
@@ -566,24 +567,26 @@ void OnlineSpikesV2::loadKilosortTrainingData(std::string directoryPath)
     auto npHpFilter              = cnpy::npy_load(directoryPath + "hp_filter.npy");
     auto npxc                    = cnpy::npy_load(directoryPath + "xc.npy");
     auto npyc                    = cnpy::npy_load(directoryPath + "yc.npy");
+	auto npclusterCentroidsPca	 = cnpy::npy_load(directoryPath + "cluster_centroids_pca.npy");
 
     filterLen = npHpFilter.num_vals;
 
     std::cout << "Copying tensors to device..." << std::endl;
 
     // --- Copy to GPU ---
-    _CUDA_CALL(cudaMemcpy(d_ctc,                   npctc.data<float>(),               unclu_T * unclu_T * (2 * M + 1) * sizeof(float), cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_Wall3,                 npWall3.data<float>(),             unclu_T * K * C * sizeof(float),                 cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_driftMatrix,           npDriftMatrix.data<float>(),       C * C * sizeof(float),                           cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_iCC,                   npiCC.data<int64_t>(),             10 * C * sizeof(int64_t),                        cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_iU,                    npiU.data<int64_t>(),              unclu_T * sizeof(int64_t),                       cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_Ucc,                   npUcc.data<float>(),               10 * K * unclu_T * sizeof(float),                cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_wPCA,                  npwPCA.data<float>(),              K * M * sizeof(float),                           cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_wPCA_permuted,         npwPCA_permuted.data<float>(),     K * M * sizeof(float),                           cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_templateWaveforms,     nptemplateWaveforms.data<float>(), unclu_T * M * C * sizeof(float),                 cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_hpFilterFull,          npHpFilter.data<float>(),          filterLen * sizeof(float),                       cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_xc,                    npxc.data<float>(),                C * sizeof(float),                               cudaMemcpyHostToDevice));
-    _CUDA_CALL(cudaMemcpy(d_yc,                    npyc.data<float>(),                C * sizeof(float),                               cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_ctc,                   npctc.data<float>(),                 unclu_T * unclu_T * (2 * M + 1) * sizeof(float), cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_Wall3,                 npWall3.data<float>(),               unclu_T * K * C * sizeof(float),                 cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_driftMatrix,           npDriftMatrix.data<float>(),         C * C * sizeof(float),                           cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_iCC,                   npiCC.data<int64_t>(),               10 * C * sizeof(int64_t),                        cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_iU,                    npiU.data<int64_t>(),                unclu_T * sizeof(int64_t),                       cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_Ucc,                   npUcc.data<float>(),                 10 * K * unclu_T * sizeof(float),                cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_wPCA,                  npwPCA.data<float>(),                K * M * sizeof(float),                           cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_wPCA_permuted,         npwPCA_permuted.data<float>(),       K * M * sizeof(float),                           cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_templateWaveforms,     nptemplateWaveforms.data<float>(),   unclu_T * M * C * sizeof(float),                 cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_hpFilterFull,          npHpFilter.data<float>(),            filterLen * sizeof(float),                       cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_xc,                    npxc.data<float>(),                  C * sizeof(float),                               cudaMemcpyHostToDevice));
+    _CUDA_CALL(cudaMemcpy(d_yc,                    npyc.data<float>(),                  C * sizeof(float),                               cudaMemcpyHostToDevice));
+	_CUDA_CALL(cudaMemcpy(d_clusterCentroidsPca,   npclusterCentroidsPca.data<float>(), T * K * sizeof(float),							 cudaMemcpyHostToDevice));
 
     _CUDA_CALL(cudaDeviceSynchronize());
 
@@ -803,12 +806,12 @@ void OnlineSpikesV2::runSpikeSorting()
 		};
 
 		sendPayload(&imecFm, payload, decoderImecAddr);
-
+		//duplicate check in save spikes
 		// Debug
 		writeSpikesToFile(times, templates, amplitudes);
 
 		// Update stream sample count
-		processedCt = latestCt;
+		processedCt = latestCt - lookback; //positive lookback means we are overlapping our batches to ensure we capture all of the data with the zeroing
 
 		times.clear();
 		templates.clear();
@@ -839,6 +842,10 @@ void OnlineSpikesV2::computeClosestClusters(long currBatchNumSamples, long numSp
 	int blocksPerGrid = (numSpikes * K * numNearestChans + DEFAULT_TPB - 1) / DEFAULT_TPB;
 	transpose_xfeat <<<blocksPerGrid, DEFAULT_TPB >>> (d_xfeat, d_tF, numNearestChans, numSpikes, K);
 	_CUDA_CALL(cudaDeviceSynchronize());
+
+
+
+
 
 	blocksPerGrid = (numSpikes + DEFAULT_TPB - 1) / DEFAULT_TPB;
 	compute_spike_positions_kernel <<<blocksPerGrid, DEFAULT_TPB >>> (
@@ -1135,6 +1142,7 @@ void OnlineSpikesV2::saveSpikes(
 	//Loop over found spikes
 	for (long i = 0; i < numSpikes; i++) {
 		sampleInd = spikeTimes[i] - M / 2 - M + nt0min; // just copying kilosort here
+		sampleInd -= lookback;							// to account for our overlapping batches
 		amplitude = spikeAmplitudes[i];	
 		templateInd = closestCluster(closest_x[i], closest_y[i]);
 

@@ -15,6 +15,7 @@
 #include <npp.h> // to get the number of GPU devices
 
 #include <algorithm>
+#include <sstream>
 
 //Check if we are not in the .exe folder. A bit ugly, but it works
 void exeFolderSetup() {
@@ -52,11 +53,11 @@ void runSorter(sockaddr_in mainAddr, InputParameters params, DataSocket** &mNC) 
 		cudaGetDeviceCount(&nGPUsDetected);
 		
 		if (nGPUsDetected == 0) {
-			throw std::runtime_error("No GPUs detected, cannot run OnlineSpikeSorter\n");
+			throw std::runtime_error("No GPUs detected, cannot run Live Spike Sorter\n");
 		}
 
 		if (params.vSelectedDevices.size() == 0) {
-			std::cout << "WARNING: No devices selected for OnlineSpikeSorter. Running on one GPU by default.\n";
+			std::cout << "WARNING: No devices selected for Live Spike Sorter. Running on one GPU by default.\n";
 			params.vSelectedDevices.push_back(0);
 		}
 
@@ -78,7 +79,7 @@ void runSorter(sockaddr_in mainAddr, InputParameters params, DataSocket** &mNC) 
 			ossParams.uSelectedDevice = deviceIndex;
 			ossParams.sInputFolder = params.mapDeviceFilePaths[deviceIndex];
 			ossParams.sOSSOutputFolder = params.mapOSSOutputFolders[deviceIndex];
-			std::cout << "Setting OSS output folder to " << params.mapOSSOutputFolders[deviceIndex];
+			std::cout << "Setting LSS output folder to " << params.mapOSSOutputFolders[deviceIndex];
 			std::thread ossThread = std::thread(runOSSParallel, mainAddr, ossParams, sharedSocket);
 			ossThread.detach();
 		}
@@ -149,8 +150,80 @@ InputParameters parseCmdArgs(int argc, char* argv[]) {
 			cmdLineParams.sdmPort = std::stoi(argv[i + 1]);
 			std::cout << "Passed in stimulus display machine port: " << cmdLineParams.sdmPort << std::endl;
 		}
-	}
+		else if (arg == "--sdm_subset") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply comma-separated indices after --sdm_subset" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
 
+			cmdLineParams.vSdmActivitySubset.clear();
+			std::stringstream ss(argv[i + 1]);
+			std::string item;
+			while (std::getline(ss, item, ',')) {
+				if (item.empty())
+					continue;
+				cmdLineParams.vSdmActivitySubset.push_back(std::stol(item));
+			}
+		}
+		else if (arg == "--sdm_trigger_z") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply float after --sdm_trigger_z" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.sdmTriggerZ = std::stof(argv[i + 1]);
+		}
+		else if (arg == "--sdm_baseline_min_seconds") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply float after --sdm_baseline_min_seconds" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.sdmBaselineMinSeconds = std::stof(argv[i + 1]);
+		}
+		else if (arg == "--sdm_trigger_bin_ms") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply int after --sdm_trigger_bin_ms" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.sdmTriggerBinMs = std::stoi(argv[i + 1]);
+		}
+		else if (arg == "--sdm_processor") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply type (zscore|logreg|bincounts) after --sdm_processor" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.sdmProcessorType = argv[i + 1];
+			std::cout << "SDM processor type: " << cmdLineParams.sdmProcessorType << std::endl;
+		}
+		else if (arg == "--sdm_spikes_file") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply file path after --sdm_spikes_file" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.sSdmSpikesFile = argv[i + 1];
+		}
+		else if (arg == "--sdm_event_file") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply file path after --sdm_event_file" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.sSdmEventFile = argv[i + 1];
+		}
+		else if (arg == "--sdm_decoder_work_folder") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply folder path after --sdm_decoder_work_folder" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.sSdmDecoderWorkFolder = argv[i + 1];
+		}
+		else if (arg == "--sdm_decoder_window_ms") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply int after --sdm_decoder_window_ms" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.sdmDecoderWindowMs = std::stoi(argv[i + 1]);
+		}
+	}
+	
 	// second pass through for args that depend on some other args
 	for (int i = 0; i < argc; ++i) {
 		std::string arg = argv[i];
@@ -267,6 +340,20 @@ int main(int argc, char* argv[]) {
 
 	// Gather the final input arguments after the user is finished with the input GUI
 	InputParameters params = gui.gatherInputParameters();
+
+	// Ensure output directories exist
+	namespace fs = std::experimental::filesystem;
+	for (auto const& deviceIndex : params.vSelectedDevices) {
+		auto ensureDir = [](const std::string& path) {
+			if (!path.empty()) {
+				fs::create_directories(fs::path(path));
+			}
+		};
+		ensureDir(params.mapOSSOutputFolders[deviceIndex]);
+		ensureDir(params.mapDecoderInputFolders[deviceIndex]);
+	}
+	if (!params.sDecoderWorkFolder.empty())
+		fs::create_directories(fs::path(params.sDecoderWorkFolder));
 
 	// Start the main server and perform handshakes with spikesorter
 	std::cout << "Starting Main Server." << std::endl;

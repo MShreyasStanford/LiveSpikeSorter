@@ -1,0 +1,11 @@
+{
+    "base_path": "C:/SGL_DATA/05_31",
+    "bin_file": "C:/SGL_DATA/joplin_20240222/imec_raw/240222_g0_t0_supershorttrain.imec0.ap.bin",
+    "meta_file": "C:/SGL_DATA/joplin_20240222/imec_raw/240222_g0_t0_supershorttrain.imec0.ap.meta",
+    "chanmap_file": "C:/SGL_DATA/05_31/imec_raw/neuropixels_NHP_channel_map_dev_staggered_v1.mat",
+    "rerun_kilosort": false,
+    "ks_output_dir": "C:/SGL_DATA/05_31/kilosort4",
+    "sdm_enabled": false,
+    "sdm_ip": "127.0.0.1",
+    "sdm_port": "9999"
+}

@@ -2,9 +2,12 @@
 #define DECODER_H_
 
 #include <mutex>
+#include <vector>
+#include <memory>
 #include "BaseModel.h"
 #include "dataBinner.h"
-#include "../Networking/Sock.h" 
+#include "SdmProcessor.h"
+#include "../Networking/Sock.h"
 #include "../Networking/sorterParameters.h"
 #include "../Networking/onlineSpikesPayload.h"
 #include "../Networking/inputParameters.h"
@@ -56,6 +59,11 @@ private:
 	Sock m_sdmSock; // connected to stimulus display machine
 	FragmentManager imecFm;
 	FragmentManager nidqFm;
+
+	std::vector<long> m_sdmActivitySubset;
+	std::unique_ptr<SdmProcessor> m_sdmProcessor;
+	int m_sdmTriggerBinMs;
+	float m_sdmSamplingRateHz;
 
 	bool isDecoding;
 	bool readFromFile;

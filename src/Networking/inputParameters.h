@@ -3,6 +3,7 @@
 
 typedef unsigned short  uint16;
 
+#include <string>
 #include <vector>
 #include <map>
 
@@ -17,13 +18,18 @@ struct InputParameters {
 								sDecoderWorkFolder{},
 								sDecoderInputFolder{},
 								sOSSOutputFolder{},
-								sdmIP{};
+								sdmIP{},
+								sdmProcessorType{ "zscore" },
+								sSdmSpikesFile{},
+								sSdmEventFile{},
+								sSdmDecoderWorkFolder{};
 
 	uint16						uDataAccquisitionPort,
 								uSelectedDevice;
 
 	std::vector<uint16>			vSelectedDevices,
 								vChannelSubset;
+	std::vector<long>			vSdmActivitySubset{};
 
 	std::map<uint16, std::string>	mapDeviceFilePaths,
 								mapOSSOutputFolders,
@@ -33,6 +39,11 @@ struct InputParameters {
 	double						dTau,
 								dThreshold,
 								dRatioToMax;
+
+	float						sdmTriggerZ{ 1.0f },
+								sdmBaselineMinSeconds{ 10.0f };
+	int							sdmTriggerBinMs{ 50 },
+								sdmDecoderWindowMs{ 300 };
 
 	float						fImecSamplingRate,
 								fNidqSamplingRate,

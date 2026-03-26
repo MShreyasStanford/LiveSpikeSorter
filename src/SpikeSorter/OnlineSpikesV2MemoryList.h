@@ -88,3 +88,4 @@ enum MemoryType {
 	X(float, d_xs, Device, W * unclu_T) \
 	X(float, d_ys, Device, W * unclu_T) \
 	X(float, d_p2pBatch, Device, W * C) \
+	X(float, d_clusterCentroidsPca, Device, T * K) \

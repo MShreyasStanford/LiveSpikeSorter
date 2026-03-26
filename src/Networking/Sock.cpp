@@ -130,6 +130,7 @@ bool Sock::connect(const std::string &host, uint16 port)
 
 		m_error = LASTERROR_STR();
 		CLOSE(m_sock);
+		m_sock = -1;
 
 		return false;
 	}
@@ -258,6 +259,7 @@ uint Sock::sendData(
 		std::cout << "Error in send() or sendto() with error code: " << WSAGetLastError() << std::endl;
 		m_error = LASTERROR_STR();
 		//throw SockErr(m_error);
+		return 0;
 	}
 	else if (count == 0) {
 
@@ -265,7 +267,7 @@ uint Sock::sendData(
 		//	std::string("EOF on socket to ") + m_host);
 	}
 
-	return count;
+	return static_cast<uint>(count);
 }
 
 

@@ -1,0 +1,42 @@
+{
+    "num_sorters": 1,
+    "base_paths": [
+        "C:\\Users\\Spike Sorter\\OSSExperiments\\260325_train_g0"
+    ],
+    "ks_output_dirs": [
+        "C:\\Users\\Spike Sorter\\OSSExperiments\\260325_train_g0\\oss_training"
+    ],
+    "bin_files": [
+        "C:\\Users\\Spike Sorter\\OSSExperiments\\260325_train_g0\\260325_train_g0_imec0\\260325_train_g0_t0.imec0.ap.bin"
+    ],
+    "meta_files": [
+        "C:\\Users\\Spike Sorter\\OSSExperiments\\260325_train_g0\\260325_train_g0_imec0\\260325_train_g0_t0.imec0.ap.meta"
+    ],
+    "chanmap_files": [
+        "C:\\Users\\Spike Sorter\\OSSExperiments\\channel_maps\\neuropixels_NHP_channel_map_dev_staggered_v1.mat"
+    ],
+    "rerun_flags": [
+        false
+    ],
+    "sdm_flags": [
+        true
+    ],
+    "sdm_ips": [
+        "192.168.1.1"
+    ],
+    "sdm_ports": [
+        "9999"
+    ],
+    "sdm_subsets": [
+        ""
+    ],
+    "sdm_trigger_zs": [
+        "1"
+    ],
+    "sdm_baseline_min_seconds": [
+        "10.0"
+    ],
+    "sdm_trigger_bin_ms": [
+        "100"
+    ]
+}

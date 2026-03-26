@@ -96,6 +96,7 @@ private:
 	long redundancy; // # of copies of memory to allocate because we don't know number of spikes apriori
 	long timeBehind; // Time (ms) we are allowed to be behind from SGLX; 0: skip batches if behind, >= 100'000: no skip
 	long downsampling; // Factor we are temporally downsampling
+	long lookback; // # of samples to look into the past for each batch to ensure we're capturing all of the data. double counting should be culled in saveSpikesw
 	float samplingRate; // IMEC sampling rate (hz)
 	int nidqRefreshRate; // NIDQ refresh rate (no idea what units or anything)
 	bool smallSkip;

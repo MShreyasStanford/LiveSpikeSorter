@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <mutex>
+#include <unordered_set>
 #include "../Helpers/FileWriter.h"
 
 // DataBinner is an implementation of a Circular Buffer
@@ -15,7 +16,8 @@ public:
 	void insert(std::vector<long> times, std::vector<long> channels);
 	void updateTime(long time);
 	std::map<long, double> getDataWindow();
-	void readInSpikes(const char* csvFilePath, const char* eventFilePath, const char* outputFilePath, FileWriter *m_fwOut);
+	void readInSpikes(const char* csvFilePath, const char* eventFilePath, const char* outputFilePath, FileWriter *m_fwOut,
+	                  const std::unordered_set<long>* channelFilter = nullptr);
 
 protected:
 	char* strsep(char **stringp, const char *delim);

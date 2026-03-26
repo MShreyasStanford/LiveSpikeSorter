@@ -26,7 +26,7 @@ STATE_FILE = Path(__file__).parent / "multi_gui_state.json"
 # GUI for Multiple Sorters
 # -------------------------------
 root = tk.Tk()
-root.title("Select Directories and Files for Multiple Sorters")
+root.title("Live Spike Sorter \u2014 Configuration")
 
 # Number of sorters
 num_sorters_var = tk.IntVar(value=1)
@@ -43,6 +43,7 @@ base_path_vars, ks_output_dir_vars = [], []
 bin_file_vars, meta_file_vars, chanmap_file_vars = [], [], []
 rerun_ks_vars, sdm_vars = [], []
 sdm_ip_vars, sdm_port_vars = [], []
+sdm_subset_vars, sdm_trigger_z_vars, sdm_baseline_min_seconds_vars, sdm_trigger_bin_ms_vars = [], [], [], []
 file_frames, sdm_frames = [], []
 
 # Hints dictionary
@@ -102,6 +103,7 @@ def update_tabs():
         for lst in (base_path_vars, ks_output_dir_vars, bin_file_vars,
                     meta_file_vars, chanmap_file_vars, rerun_ks_vars,
                     sdm_vars, sdm_ip_vars, sdm_port_vars,
+                    sdm_subset_vars, sdm_trigger_z_vars, sdm_baseline_min_seconds_vars, sdm_trigger_bin_ms_vars,
                     file_frames, sdm_frames):
             del lst[n:]
 
@@ -116,6 +118,10 @@ def update_tabs():
         sdm_vars.append(tk.BooleanVar(value=False))
         sdm_ip_vars.append(tk.StringVar(value=""))
         sdm_port_vars.append(tk.StringVar(value=""))
+        sdm_subset_vars.append(tk.StringVar(value=""))
+        sdm_trigger_z_vars.append(tk.StringVar(value="1.0"))
+        sdm_baseline_min_seconds_vars.append(tk.StringVar(value="10.0"))
+        sdm_trigger_bin_ms_vars.append(tk.StringVar(value="100"))
         file_frames.append(None)
         sdm_frames.append(None)
 
@@ -193,6 +199,34 @@ def build_tab(frame, idx):
     )
     tk.Entry(sdm_frame, textvariable=sdm_port_vars[idx], width=10).grid(
         row=1, column=1
+    )
+
+    tk.Label(sdm_frame, text="Subset (comma-separated templates):").grid(
+        row=2, column=0, padx=5, pady=5
+    )
+    tk.Entry(sdm_frame, textvariable=sdm_subset_vars[idx], width=25).grid(
+        row=2, column=1
+    )
+
+    tk.Label(sdm_frame, text="Trigger Z:").grid(
+        row=3, column=0, padx=5, pady=5
+    )
+    tk.Entry(sdm_frame, textvariable=sdm_trigger_z_vars[idx], width=10).grid(
+        row=3, column=1
+    )
+
+    tk.Label(sdm_frame, text="Baseline min seconds:").grid(
+        row=4, column=0, padx=5, pady=5
+    )
+    tk.Entry(sdm_frame, textvariable=sdm_baseline_min_seconds_vars[idx], width=10).grid(
+        row=4, column=1
+    )
+
+    tk.Label(sdm_frame, text="Trigger bin (ms):").grid(
+        row=5, column=0, padx=5, pady=5
+    )
+    tk.Entry(sdm_frame, textvariable=sdm_trigger_bin_ms_vars[idx], width=10).grid(
+        row=5, column=1
     )
     if sdm_vars[idx].get():
         sdm_frame.grid(row=row, column=0, columnspan=4,
@@ -288,6 +322,10 @@ def main():
                 toggle_sdm(i)
             sdm_ip_vars[i].set(state["sdm_ips"][i])
             sdm_port_vars[i].set(state["sdm_ports"][i])
+            sdm_subset_vars[i].set(state.get("sdm_subsets", [""] * num_sorters_var.get())[i])
+            sdm_trigger_z_vars[i].set(state.get("sdm_trigger_zs", ["1.0"] * num_sorters_var.get())[i])
+            sdm_baseline_min_seconds_vars[i].set(state.get("sdm_baseline_min_seconds", ["10.0"] * num_sorters_var.get())[i])
+            sdm_trigger_bin_ms_vars[i].set(state.get("sdm_trigger_bin_ms", ["50"] * num_sorters_var.get())[i])
 
     create_finish_widgets()
     root.mainloop()
@@ -307,6 +345,10 @@ def run_online_multi():
     SDM_FLAGS = [v.get() for v in sdm_vars]
     SDM_IPS = [v.get().strip() for v in sdm_ip_vars]
     SDM_PORTS = [v.get().strip() for v in sdm_port_vars]
+    SDM_SUBSETS = [v.get().strip() for v in sdm_subset_vars]
+    SDM_TRIGGER_ZS = [v.get().strip() for v in sdm_trigger_z_vars]
+    SDM_BASELINE_MIN_SECONDS = [v.get().strip() for v in sdm_baseline_min_seconds_vars]
+    SDM_TRIGGER_BIN_MS = [v.get().strip() for v in sdm_trigger_bin_ms_vars]
 
     # Save current state
     state = {
@@ -319,7 +361,11 @@ def run_online_multi():
         "rerun_flags": RERUN_FLAGS,
         "sdm_flags": SDM_FLAGS,
         "sdm_ips": SDM_IPS,
-        "sdm_ports": SDM_PORTS
+        "sdm_ports": SDM_PORTS,
+        "sdm_subsets": SDM_SUBSETS,
+        "sdm_trigger_zs": SDM_TRIGGER_ZS,
+        "sdm_baseline_min_seconds": SDM_BASELINE_MIN_SECONDS,
+        "sdm_trigger_bin_ms": SDM_TRIGGER_BIN_MS
     }
     try:
         with open(STATE_FILE, "w") as f:
@@ -332,16 +378,39 @@ def run_online_multi():
                                      META_FILES, CHANMAP_FILES, RERUN_FLAGS)
 
     # Build and run C++ command
+    decoder_input_dirs = [bp / 'decoder_input' for bp in BASE_PATHS]
+    cuda_output_dirs = [bp / 'cuda_output' for bp in BASE_PATHS]
+    for d in decoder_input_dirs + cuda_output_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+
     arguments = {
         '--n_gpus': str(n),
         '--oss_input': OSS_DIRS,
-        '--decoder_input': [str(bp / 'decoder_input') + '\\' for bp in BASE_PATHS],
-        '--spikes_output': [str(bp / 'decoder_input' / 'spikeOutput.txt') for bp in BASE_PATHS],
-        '--cuda_output_dir': [str(bp / 'cuda_output') + '\\' for bp in BASE_PATHS]
+        '--decoder_input': [str(d) + '\\' for d in decoder_input_dirs],
+        '--spikes_output': [str(d / 'spikeOutput.txt') for d in decoder_input_dirs],
+        '--cuda_output_dir': [str(d) + '\\' for d in cuda_output_dirs]
     }
     if any(SDM_FLAGS):
-        arguments['--sdm_ip'] = SDM_IPS
-        arguments['--sdm_port'] = SDM_PORTS
+        sdm_idxs = [i for i, enabled in enumerate(SDM_FLAGS) if enabled]
+        sdm_idx = sdm_idxs[0]
+
+        sdm_port = SDM_PORTS[sdm_idx]
+        if not sdm_port.isdigit():
+            print(f"Error: SDM enabled but port is not a valid integer: '{sdm_port}'")
+            sys.exit(1)
+
+        arguments['--sdm_ip'] = SDM_IPS[sdm_idx]
+        arguments['--sdm_port'] = sdm_port
+        arguments['--sdm_processor'] = 'bincounts'
+
+        if SDM_SUBSETS[sdm_idx]:
+            arguments['--sdm_subset'] = SDM_SUBSETS[sdm_idx]
+        if SDM_TRIGGER_ZS[sdm_idx]:
+            arguments['--sdm_trigger_z'] = SDM_TRIGGER_ZS[sdm_idx]
+        if SDM_BASELINE_MIN_SECONDS[sdm_idx]:
+            arguments['--sdm_baseline_min_seconds'] = SDM_BASELINE_MIN_SECONDS[sdm_idx]
+        if SDM_TRIGGER_BIN_MS[sdm_idx]:
+            arguments['--sdm_trigger_bin_ms'] = SDM_TRIGGER_BIN_MS[sdm_idx]
 
     cmd = [r"C:\Users\Spike Sorter\source\repos\OnlineSpikes_v2\x64\RELEASE\OnlineSpikes.exe"]
     for k, v in arguments.items():
@@ -351,9 +420,65 @@ def run_online_multi():
         else:
             cmd.extend([k, str(v)])
 
-    print("Running OSS with:", shlex.join(cmd))
+    print("Running LSS with:", shlex.join(cmd))
     proc = subprocess.Popen(cmd, shell=True)
     proc.wait()
+
+
+def cluster_centroids_pca_compute(templates, Wall, pc_feature_ind):
+    """
+    Compute 1D PCA‐space centroids for each template by weighting
+    the per‐channel PC features in `Wall` by that channel’s
+    peak-to-peak amplitude in `templates`.
+
+    Parameters
+    ----------
+    templates : np.ndarray, shape (T, nt, C)
+        Raw waveforms for each of T templates,
+        nt time‐samples × C channels.
+
+    Wall : np.ndarray, shape (T, C, P)
+        PC‐feature “templates”: for each of the T templates,
+        C channels × P PCA‐dimensions.
+
+    pc_feature_ind : np.ndarray of ints, shape (T, K)
+        For each template t, the indices of the K channels
+        to use in the weighting.
+
+    Returns
+    -------
+    centroids : np.ndarray, shape (T, P)
+        For each template t and PCA‐dimension p,
+        the weighted average of Wall[t, channel_j, p].
+    """
+    T, nt, C = templates.shape
+    T2, C2, P = Wall.shape
+    assert T == T2 and C == C2, "templates and Wall must agree on T and C"
+    
+    # 1) Compute peak-to-peak amplitude per template/channel: shape (T, C)
+    p2p = templates.max(axis=1) - templates.min(axis=1)
+    
+    # 2) Allocate output
+    centroids = np.zeros((T, P), dtype=Wall.dtype)
+    
+    # 3) Loop over templates
+    for t in range(T):
+        idx = pc_feature_ind[t]             # shape (K,)
+        weights = p2p[t, idx].astype(float) # shape (K,)
+        wsum = weights.sum()
+        if wsum == 0:
+            # fallback to uniform if all amplitudes are zero
+            weights = np.ones_like(weights)
+            wsum = float(weights.sum())
+        
+        # select the K×P block of PC‐features
+        W_sub = Wall[t, idx, :]             # shape (K, P)
+        
+        # weighted average across the K channels:
+        #   sum_j weights[j] * W_sub[j, :]  /  sum(weights)
+        centroids[t, :] = (weights[:, None] * W_sub).sum(axis=0) / wsum
+    
+    return centroids
 
 def curate_oss_input_dir(BASE_PATHS, KS_OUTPUT_DIRS, BIN_FILES,
                          META_FILES, CHANMAP_FILES, RERUN_FLAGS):
@@ -391,14 +516,19 @@ def curate_oss_input_dir(BASE_PATHS, KS_OUTPUT_DIRS, BIN_FILES,
         wPCA            = np.ascontiguousarray(np.load(ks_out / 'wPCA.npy'))
         wPCA_p          = torch.from_numpy(np.copy(wPCA)).permute(1,0).contiguous().numpy()
         centroids      = np.load(ks_out / 'cluster_centroids.npy', allow_pickle=True).item()
-        centroids = [v for v in centroids.values()]
+        centroids      = [v for v in centroids.values()]
         hpf            = np.array(ops['preprocessing']['hp_filter'])
         dshift         = np.array(ops['dshift'])
         drift_slope, _ = np.polyfit(np.arange(0, 30), dshift[-30:], 1)
+        pc_feature_ind = np.load(ks_out / 'pc_feature_ind.npy')
+        Wall           = np.load(ks_out / 'Wall.npy')
+        cluster_centroids_pca = cluster_centroids_pca_compute(templates, Wall, pc_feature_ind)
+        print(cluster_centroids_pca.shape)
 
         if abs(2 * drift_slope) >= 0.01: # If more than 0.01 micron drift per second in the last minute, it is unstable
             print("WARNING: Probe not yet stable. Spike sorter quality may be impacted by drift.")
 
+        print(f"Wall3.shape = {Wall3.shape}")
         drift_matrix   = np.array(get_drift_matrix(ops, dshift[-1], device='cpu')).T
         iCC, iU, Ucc  = prepare_extract(ops, torch.tensor(Wall3), ops['settings']['nearest_chans'], device='cpu')
         iCC = np.ascontiguousarray(iCC)
@@ -438,6 +568,7 @@ def curate_oss_input_dir(BASE_PATHS, KS_OUTPUT_DIRS, BIN_FILES,
         np.save(oss_in / 'xc.npy', xc)
         np.save(oss_in / 'yc.npy', yc)
         np.save(oss_in / 'preclustered_template_waveforms.npy', pre_wf)
+        np.save(oss_in / 'cluster_centroids_pca.npy', cluster_centroids_pca)
         with open(oss_in / 'misc.txt', 'w') as f:
             f.write(f"nt0min:{ops['nt0min']}\n")
             f.write(f"numNearestChans:{ops['settings']['nearest_chans']}\n")
