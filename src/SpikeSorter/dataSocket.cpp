@@ -63,11 +63,11 @@ bool StreamDataSocket::connect() {
 	{
 		std::unique_lock<std::mutex> lock(m_mSGlxMutex);
 		if (!sglx_connect_std(S, m_sHost, m_uPort)) {
-		error:
-			printf("error [%s]\n", S.err.c_str());
+			std::cerr << "error [" << S.err << "]" << std::endl;
+			return false;
 		}
 	}
-			std::cout << "...Connection successful!" << std::endl;
+	std::cout << "...Connection successful!" << std::endl;
 	//m_mSGlxMutex.unlock();
 	return true;
 }
