@@ -34,6 +34,7 @@
 #include <cusolverDn.h>
 #include <cufft.h>
 #include "../Helpers/TimeHelpers.h"
+#include "../Helpers/LatencyMonitor.h"
 #include "../Networking/onlineSpikesPayload.h"
 #include "../Networking/NetworkHelpers.h"
 #include "../Networking/FragmentManager.h"
@@ -632,6 +633,14 @@ void OnlineSpikesV2::loadKilosortClusteringData(std::string directoryPath)
 void OnlineSpikesV2::runSpikeSorting()
 {
 	static const char *ptLabel = { "OnlineSpikesV2::runSpikeSorting" };
+
+	LatencyMonitor latencyMonitor(100, 0.9f);
+	Timer::SetThreadCallback([&latencyMonitor](const std::string& name, long long durationUs) {
+		latencyMonitor.recordStage(name, durationUs);
+	});
+	struct TimerCallbackGuard {
+		~TimerCallbackGuard() { Timer::ClearThreadCallback(); }
+	} timerCallbackGuard;
 	
 	long 	processedCt, // Most recent stream sample count that has been processed
 			allowedCt, // Samples we are behind
@@ -646,6 +655,10 @@ void OnlineSpikesV2::runSpikeSorting()
 
 	// timespec's to keep track of processing time to be sent to the Decoder
 	struct timespec batchBefore, batchAfter;
+	long batchCounter = 0;
+	bool warnedNearRealtime = false;
+	bool warnedOverrun = false;
+	bool warnedSkipRate = false;
 
 	// Vectors to store the spike times, templates, and amplitudes to be sent to the Decoder
 	std::vector<long> times;
@@ -793,6 +806,57 @@ void OnlineSpikesV2::runSpikeSorting()
 
 		clock_gettime(batchAfter);
 		long processTime = GetTimeDiff(batchAfter, batchBefore);
+		const float acquisitionBudgetMs = (samplingRate > 0.0f)
+			? (1000.0f * static_cast<float>(currBatchNumSamples) / samplingRate)
+			: 0.0f;
+
+		latencyMonitor.onBatch(processTime, acquisitionBudgetMs, skip, numSpikes);
+		LatencySnapshot latency = latencyMonitor.getSnapshot();
+		batchCounter++;
+
+		if (latency.consecutiveHighRatio >= 5 && !warnedNearRealtime) {
+			std::cerr << "[LatencyMonitor] Process/acquisition ratio > 0.9 for "
+				<< latency.consecutiveHighRatio
+				<< " consecutive batches; nearing realtime limit." << std::endl;
+			warnedNearRealtime = true;
+		}
+		if (latency.latestRatio <= 0.8f) {
+			warnedNearRealtime = false;
+		}
+
+		if (latency.latestRatio > 1.0f && !warnedOverrun) {
+			std::cerr << "[LatencyMonitor] Falling behind realtime (ratio="
+				<< latency.latestRatio
+				<< "). Consider timeBehind=0 for strict low-latency skipping."
+				<< std::endl;
+			warnedOverrun = true;
+		}
+		if (latency.latestRatio <= 1.0f) {
+			warnedOverrun = false;
+		}
+
+		if (latency.skipRatePerMin > 10.0f && !warnedSkipRate) {
+			std::cerr << "[LatencyMonitor] Skip rate is high ("
+				<< latency.skipRatePerMin
+				<< " skips/min). Consider reducing maxWindow or checking GPU utilization."
+				<< std::endl;
+			warnedSkipRate = true;
+		}
+		if (latency.skipRatePerMin <= 5.0f) {
+			warnedSkipRate = false;
+		}
+
+		if ((batchCounter % 200) == 0) {
+			auto topStages = latencyMonitor.topStageMeansMs(3);
+			if (!topStages.empty()) {
+				std::cerr << "[LatencyMonitor] Top stage means (ms): ";
+				for (size_t i = 0; i < topStages.size(); i++) {
+					std::cerr << topStages[i].first << "=" << topStages[i].second;
+					if (i + 1 < topStages.size()) std::cerr << ", ";
+				}
+				std::cerr << std::endl;
+			}
+		}
 
 		// Send relevant data to decoder
 		OnlineSpikesPayload payload = { recordingOffset, 
@@ -804,6 +868,14 @@ void OnlineSpikesV2::runSpikeSorting()
 								p2p,
 								processTime 
 		};
+		payload.processingBudgetMs = latency.latestBudgetMs;
+		payload.processToAcqRatio = latency.latestRatio;
+		payload.processToAcqRatioP95 = latency.p95Ratio;
+		payload.processToAcqRatioMax = latency.maxRatio;
+		payload.processTimeP95Ms = latency.p95ProcessMs;
+		payload.processTimeMaxMs = latency.maxProcessMs;
+		payload.skipRatePerMin = latency.skipRatePerMin;
+		payload.spikeYieldMean = latency.meanSpikeYield;
 
 		sendPayload(&imecFm, payload, decoderImecAddr);
 		//duplicate check in save spikes
