@@ -1,4 +1,6 @@
 #include <numeric>
+#include <algorithm>
+#include <cmath>
 
 #include <ImGUI/implot.h>
 #include <ImGUI/implot_internal.h>
@@ -154,9 +156,15 @@ void OutputGuiTab::UpdateEvents() {
 			m_vfP2P.push_back(payload.P2P);
 		}
 
-		processingTimeMutex.lock();
-		m_vProcessTimes.push_back(payload.processTime);
-		processingTimeMutex.unlock();
+		{
+			std::lock_guard<std::mutex> lk(processingTimeMutex);
+			m_vProcessTimes.push_back(payload.processTime);
+			m_vProcessBudgets.push_back(payload.processingBudgetMs);
+			m_vProcessRatios.push_back(payload.processToAcqRatio);
+			m_vProcessRatiosP95.push_back(payload.processToAcqRatioP95);
+			m_vSkipRatesPerMin.push_back(payload.skipRatePerMin);
+			m_vSpikeYieldMean.push_back(payload.spikeYieldMean);
+		}
 
 		/*
 		for (int ii = 0; ii < payload.Times.size(); ii++) {
@@ -440,6 +448,12 @@ void OutputGuiTab::plotProcessTimes(const ImVec2 windowCenter, bool &showProcess
 
 	processingTimeMutex.lock();
 	int len = m_vProcessTimes.size();
+	if (len == 0) {
+		processingTimeMutex.unlock();
+		ImGui::Text("No processing-time data received yet.");
+		ImGui::End();
+		return;
+	}
 
 	int toShow = useFullHistory || (historyNBatches > len) ? len : historyNBatches;
 	int toSkip = len - toShow;
@@ -455,6 +469,13 @@ void OutputGuiTab::plotProcessTimes(const ImVec2 windowCenter, bool &showProcess
 
 	double inTimeCount = std::count_if(m_vProcessTimes.begin() + toSkip, m_vProcessTimes.end(), [&](long const val) { return val < maxScanWindow; });
 	double inTimePerc = inTimeCount / toShow;
+
+	const int lastIdx = len - 1;
+	const float latestBudget = (lastIdx < static_cast<int>(m_vProcessBudgets.size())) ? m_vProcessBudgets[lastIdx] : 0.0f;
+	const float latestRatio = (lastIdx < static_cast<int>(m_vProcessRatios.size())) ? m_vProcessRatios[lastIdx] : 0.0f;
+	const float latestP95Ratio = (lastIdx < static_cast<int>(m_vProcessRatiosP95.size())) ? m_vProcessRatiosP95[lastIdx] : 0.0f;
+	const float latestSkipRate = (lastIdx < static_cast<int>(m_vSkipRatesPerMin.size())) ? m_vSkipRatesPerMin[lastIdx] : 0.0f;
+	const float latestSpikeYield = (lastIdx < static_cast<int>(m_vSpikeYieldMean.size())) ? m_vSpikeYieldMean[lastIdx] : 0.0f;
 	processingTimeMutex.unlock();
 
 	static int bins = 50;
@@ -464,7 +485,9 @@ void OutputGuiTab::plotProcessTimes(const ImVec2 windowCenter, bool &showProcess
 	ImGui::SameLine();
 	setRange(range, 10, 500);
 
-	ImGui::Text("Mean: %.2f,  STD: %.2f, Percentage on time: %.2f", mean, stdDev, inTimePerc);
+	ImGui::Text("Mean: %.2f ms,  STD: %.2f ms,  Percentage on time: %.2f", mean, stdDev, inTimePerc);
+	ImGui::Text("Latest budget: %.2f ms, latest ratio: %.2f, ratio P95: %.2f", latestBudget, latestRatio, latestP95Ratio);
+	ImGui::Text("Skip rate: %.2f skips/min, mean spike yield: %.2f spikes/batch", latestSkipRate, latestSpikeYield);
 
 	ImPlot::BeginPlot("Batch Processing Time Distribution", ImVec2(-1, -1));
 	ImPlot::SetupAxes("Time (ms)", "Density", ImPlotAxisFlags_AutoFit);
@@ -475,6 +498,26 @@ void OutputGuiTab::plotProcessTimes(const ImVec2 windowCenter, bool &showProcess
 	processingTimeMutex.unlock();
 	ImPlot::PlotVLines("Batch Size", &maxScanWindow, 1);
 	ImPlot::EndPlot();
+
+	processingTimeMutex.lock();
+	const int ratioLen = m_vProcessRatios.size();
+	if (ratioLen > 1) {
+		const int ratioToShow = useFullHistory || (historyNBatches > ratioLen) ? ratioLen : historyNBatches;
+		const int ratioToSkip = ratioLen - ratioToShow;
+		std::vector<float> xVals(ratioToShow);
+		for (int i = 0; i < ratioToShow; i++) {
+			xVals[i] = static_cast<float>(i);
+		}
+		ImPlot::BeginPlot("Process/Budget Ratio Trend", ImVec2(-1, 180));
+		ImPlot::SetupAxes("Recent Batches", "Ratio", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+		ImPlot::PlotLine("ratio", xVals.data(), m_vProcessRatios.data() + ratioToSkip, ratioToShow);
+		const float one = 1.0f;
+		const float nearLimit = 0.9f;
+		ImPlot::PlotHLines("1.0x", &one, 1);
+		ImPlot::PlotHLines("0.9x", &nearLimit, 1);
+		ImPlot::EndPlot();
+	}
+	processingTimeMutex.unlock();
 	ImGui::End();
 }
 

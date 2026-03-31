@@ -150,6 +150,11 @@ private:
 	std::vector<double> m_vdVRMS;
 	std::vector<float>  m_vfP2P;
 	std::vector<long>	m_vProcessTimes;
+	std::vector<float>	m_vProcessBudgets;
+	std::vector<float>	m_vProcessRatios;
+	std::vector<float>	m_vProcessRatiosP95;
+	std::vector<float>	m_vSkipRatesPerMin;
+	std::vector<float>	m_vSpikeYieldMean;
 	int					maxScanWindow;
 
 	std::mutex processingTimeMutex;

@@ -15,7 +15,15 @@ struct OnlineSpikesPayload {
 
 	double		VRMS;
 	float		P2P;
-	long		processTime;	
+	long		processTime;
+	float		processingBudgetMs{ 0.0f };
+	float		processToAcqRatio{ 0.0f };
+	float		processToAcqRatioP95{ 0.0f };
+	float		processToAcqRatioMax{ 0.0f };
+	float		processTimeP95Ms{ 0.0f };
+	float		processTimeMaxMs{ 0.0f };
+	float		skipRatePerMin{ 0.0f };
+	float		spikeYieldMean{ 0.0f };
 
 	// These used for Decoder->GUI but not OnlineSpikes->Decoder 
 	long eventStreamSampleCt;
@@ -38,6 +46,14 @@ struct OnlineSpikesPayload {
 			VRMS,
 			P2P,
 			processTime,
+			processingBudgetMs,
+			processToAcqRatio,
+			processToAcqRatioP95,
+			processToAcqRatioMax,
+			processTimeP95Ms,
+			processTimeMaxMs,
+			skipRatePerMin,
+			spikeYieldMean,
 			eventStreamSampleCt,
 			predictLabel,
 			label,
