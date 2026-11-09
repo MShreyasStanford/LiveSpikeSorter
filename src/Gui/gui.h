@@ -40,6 +40,17 @@ static HANDLE							g_hSwapChainWaitableObject = NULL;
 static ID3D12Resource*					g_mainRenderTargetResource[NUM_BACK_BUFFERS] = {};
 static D3D12_CPU_DESCRIPTOR_HANDLE		g_mainRenderTargetDescriptor[NUM_BACK_BUFFERS] = {};
 
+static ID3D12Resource*					g_iconTexture = nullptr;
+static D3D12_GPU_DESCRIPTOR_HANDLE		g_iconSrvGpuHandle = {};
+static int								g_iconWidth = 0;
+static int								g_iconHeight = 0;
+
+// auto-dock windows into correct panel
+extern ImGuiID                                                        g_spikeStatsDockNode;
+extern ImGuiID														  g_rasterDockNode;
+
+
+
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
@@ -71,6 +82,7 @@ public:
 
 	InputParameters gatherInputParameters();
 	void plotOutputs(sockaddr_in mainAddr, long m_lMaxScanWind, long m_lSpikeRateWindow, bool isDecoding);
+	void RenderIconWindow();
 
 	// Getters
 	int &getComputerJob() { return inputGUI.getComputerJob(); }

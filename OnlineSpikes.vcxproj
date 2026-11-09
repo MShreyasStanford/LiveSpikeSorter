@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -21,17 +21,17 @@
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v141</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RELEASE|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v141</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 11.3.props" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 11.8.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
@@ -40,6 +40,13 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+
+  <PropertyGroup>
+  <PythonRoot Condition="'$(PythonRoot)' == '' AND '$(PYTHON310)' != ''">$(PYTHON310)</PythonRoot>
+  <PythonRoot Condition="'$(PythonRoot)' == ''">$([MSBuild]::GetRegistryValueFromView('HKEY_CURRENT_USER\Software\Python\PythonCore\3.10\InstallPath', null, null, RegistryView.Registry64, RegistryView.Registry32))</PythonRoot>
+  <PythonRoot Condition="'$(PythonRoot)' == ''">$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\Software\Python\PythonCore\3.10\InstallPath', null, null, RegistryView.Registry64, RegistryView.Registry32))</PythonRoot>
+</PropertyGroup>
+
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
     <LibraryPath>$(LibraryPath)</LibraryPath>
@@ -54,8 +61,8 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN64;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\Spike Sorter\AppData\Local\Programs\Python\Python310\Lib\site-packages\numpy\core\include;C:\Users\Spike Sorter\AppData\Local\Programs\Python\Python310\include;C:\mlpack\armadillo\include;C:\mlpack\mlpack\src;C:\mlpack\mlpack\deps\ensmallen\include;C:\mlpack\mlpack\deps\cereal\include;$(ProjectDir)/External;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN64;_DEBUG;_CONSOLE;_SILENCE_EXPERIMENTAL_FILESYSTEM_DEPRECATION_WARNING;_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(PythonRoot)Lib\site-packages\numpy\core\include;$(PythonRoot)include;$(ProjectDir)/External;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <ShowIncludes>false</ShowIncludes>
@@ -64,22 +71,26 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
       <AdditionalDependencies>cublas.lib;cudnn.lib;ws2_32.lib;npps.lib;d3d12.lib;dxgi.lib;libSglxApi.a;cusolver.lib;cudart.lib;cufft.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\Spike Sorter\AppData\Local\Programs\Python\Python310\libs;$(SolutionDir)\External\sglx;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(PythonRoot)libs;$(SolutionDir)\External\sglx;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <UACExecutionLevel>HighestAvailable</UACExecutionLevel>
     </Link>
     <PostBuildEvent>
-      <Command>echo copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"
-copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
+    <Command>echo copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"
+copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"
+echo copy "$(SolutionDir)src\SpikeGLX-CPP-SDK-main\SpikeGLX-CPP-SDK-main\API\*.dll" "$(OutDir)"
+copy /Y "$(SolutionDir)src\SpikeGLX-CPP-SDK-main\SpikeGLX-CPP-SDK-main\API\*.dll" "$(OutDir)"</Command>
     </PostBuildEvent>
+
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
+      <AdditionalOptions>-allow-unsupported-compiler %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RELEASE|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <PreprocessorDefinitions>WIN64;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\Spike Sorter\AppData\Local\Programs\Python\Python310\Lib\site-packages\numpy\core\include;C:\Users\Spike Sorter\AppData\Local\Programs\Python\Python310\include;C:\mlpack\armadillo\include;C:\mlpack\mlpack\src;C:\mlpack\mlpack\deps\ensmallen\include;C:\mlpack\mlpack\deps\cereal\include;$(ProjectDir)/External;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN64;NDEBUG;_CONSOLE;_SILENCE_EXPERIMENTAL_FILESYSTEM_DEPRECATION_WARNING;_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(PythonRoot)Lib\site-packages\numpy\core\include;$(PythonRoot)include;$(ProjectDir)/External;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <ShowIncludes>false</ShowIncludes>
@@ -98,20 +109,24 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
       <AdditionalDependencies>cublas.lib;cudnn.lib;ws2_32.lib;npps.lib;d3d12.lib;dxgi.lib;libSglxApi.a;cusolver.lib;cudart.lib;cufft.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\Users\Spike Sorter\AppData\Local\Programs\Python\Python310\libs;$(SolutionDir)\External\sglx;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(PythonRoot)libs;$(SolutionDir)\External\sglx;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <UACExecutionLevel>HighestAvailable</UACExecutionLevel>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <LinkTimeCodeGeneration>UseFastLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
     <PostBuildEvent>
-      <Command>echo copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"
-copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
-    </PostBuildEvent>
+    <Command>echo copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"
+copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"
+echo copy "$(SolutionDir)src\SpikeGLX-CPP-SDK-main\SpikeGLX-CPP-SDK-main\API\*.dll" "$(OutDir)"
+copy /Y "$(SolutionDir)src\SpikeGLX-CPP-SDK-main\SpikeGLX-CPP-SDK-main\API\*.dll" "$(OutDir)"</Command>
+</PostBuildEvent>
+
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
       <FastMath>true</FastMath>
       <CodeGeneration>compute_75,sm_75</CodeGeneration>
+      <AdditionalOptions>-allow-unsupported-compiler %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -135,6 +150,9 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <CudaCompile Include="src\SpikeSorter\OnlineSpikesV2.cu">
       <FileType>CppCode</FileType>
     </CudaCompile>
+    <CudaCompile Include="src\SpikeSorter\DriftEstimator.cu">
+      <FileType>CppCode</FileType>
+    </CudaCompile>
     <ClCompile Include="src\Decoder\BaseModel.cpp" />
     <ClCompile Include="src\Decoder\RegressionModel.cpp" />
     <ClCompile Include="src\Decoder\SKLearnModel.cpp" />
@@ -148,6 +166,7 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClCompile Include="src\Decoder\Decoder.cpp" />
     <ClCompile Include="src\Decoder\SdmProcessor.cpp" />
     <ClCompile Include="src\Decoder\ZScoreSdmProcessor.cpp" />
+    <ClCompile Include="src\Decoder\ClosedLoopSdmProcessor.cpp" />
     <ClCompile Include="src\Decoder\LogRegSdmProcessor.cpp" />
     <ClCompile Include="src\Decoder\BinCountSdmProcessor.cpp" />
     <ClCompile Include="src\Helpers\FileWriter.cpp" />
@@ -161,6 +180,7 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClCompile Include="src\NetClient\Socket.cpp" />
     <ClCompile Include="src\Networking\NetworkHelpers.cpp" />
     <ClCompile Include="src\Networking\Sock.cpp" />
+    <ClCompile Include="src\Networking\SpikeStream.cpp" />
     <ClCompile Include="src\Decoder\dataBinner.cpp" />
     <ClCompile Include="src\SpikeSorter\ThresholdCrossing.cpp" />
   </ItemGroup>
@@ -184,6 +204,8 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClInclude Include="src\SpikeSorter\myCublasError.h" />
     <ClInclude Include="src\SpikeSorter\OnlineSpikesV2MemoryList.h" />
     <ClInclude Include="src\SpikeSorter\OnlineSpikesV2.h" />
+    <ClInclude Include="src\SpikeSorter\DriftEstimator.h" />
+    <ClInclude Include="src\SpikeSorter\DriftFingerprint.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="External\CNPY\cnpy.h" />
     <ClInclude Include="src\Decoder\dataBinner.h" />
@@ -200,6 +222,8 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClInclude Include="src\Decoder\Decoder.h" />
     <ClInclude Include="src\Decoder\SdmProcessor.h" />
     <ClInclude Include="src\Decoder\ZScoreSdmProcessor.h" />
+    <ClInclude Include="src\Decoder\ClosedLoopSdmProcessor.h" />
+    <ClInclude Include="src\Decoder\SdmParams.h" />
     <ClInclude Include="src\Decoder\LogRegSdmProcessor.h" />
     <ClInclude Include="src\Decoder\BinCountSdmProcessor.h" />
     <ClInclude Include="src\Helpers\FileWriter.h" />
@@ -217,6 +241,7 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClInclude Include="src\Networking\onlineSpikesPayload.h" />
     <ClInclude Include="src\Networking\SerializationHelpers.h" />
     <ClInclude Include="src\Networking\Sock.h" />
+    <ClInclude Include="src\Networking\SpikeStream.h" />
     <ClInclude Include="src\Networking\sorterParameters.h" />
     <ClInclude Include="src\Helpers\Utils.h" />
     <ClInclude Include="src\SpikeSorter\TensorWrapper.h" />
@@ -261,6 +286,6 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 11.3.targets" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 11.8.targets" />
   </ImportGroup>
 </Project>

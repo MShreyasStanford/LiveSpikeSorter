@@ -392,7 +392,8 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
                               chan_map, hp_filter, device=device, do_CAR=do_CAR,
                               invert_sign=invert, dtype=dtype, tmin=tmin,
                               tmax=tmax, artifact_threshold=artifact,
-                              shift=shift, scale=scale, file_object=file_object)
+                              shift=shift, scale=scale, file_object=file_object,
+                              car_groups=ops.get('car_groups'))
 
     logger.info(f'N samples: {bfile.n_samples}')
     logger.info(f'N seconds: {bfile.n_samples/fs}')
@@ -461,7 +462,7 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
         hp_filter=hp_filter, whiten_mat=whiten_mat, device=device, do_CAR=do_CAR,
         invert_sign=invert, dtype=dtype, tmin=tmin, tmax=tmax,
         artifact_threshold=artifact, shift=shift, scale=scale,
-        file_object=file_object
+        file_object=file_object, car_groups=ops.get('car_groups')
         )
 
     ops, st = datashift.run(ops, bfile, device=device, progress_bar=progress_bar)
@@ -480,7 +481,7 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
         hp_filter=hp_filter, whiten_mat=whiten_mat, device=device,
         dshift=ops['dshift'], do_CAR=do_CAR, dtype=dtype, tmin=tmin, tmax=tmax,
         artifact_threshold=artifact, shift=shift, scale=scale,
-        file_object=file_object
+        file_object=file_object, car_groups=ops.get('car_groups')
         )
 
     return ops, bfile, st

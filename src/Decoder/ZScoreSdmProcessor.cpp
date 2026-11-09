@@ -21,8 +21,9 @@ ZScoreSdmProcessor::~ZScoreSdmProcessor() = default;
 void ZScoreSdmProcessor::init(const InputParameters& params,
                               const std::vector<long>& /*activitySubset*/)
 {
-	m_triggerZ = params.sdmTriggerZ;
-	m_baselineMinSeconds = params.sdmBaselineMinSeconds;
+	SdmParams p(params.mapSdmParams);
+	m_triggerZ = p.getFloat("trigger_z", 1.0f);
+	m_baselineMinSeconds = p.getFloat("baseline_min_seconds", 10.0f);
 	m_samplingRateHz = params.fImecSamplingRate;
 	m_binMs = params.sdmTriggerBinMs;
 	m_binSamples = std::max<long>(1, static_cast<long>(std::llround(
@@ -99,6 +100,13 @@ float ZScoreSdmProcessor::computeBinValue(long binEndSampleCt, int8_t& direction
 		m_binCounts.erase(it);
 	}
 
+
+	// -----------------------------------------------------------------------------------------
+	// Testing: raw spike count for this bin. 
+	/*std::cout << "[SDM] bin=" << binIdx << " count=" << count
+	          << " frozen=" << (m_baselineFrozen.load() ? 1 : 0) << std::endl;*/
+	// -----------------------------------------------------------------------------------------
+
 	if (!m_baselineFrozen.load()) {
 		// Welford's online algorithm for running mean/variance
 		m_baselineBinsSeen++;
@@ -107,6 +115,29 @@ float ZScoreSdmProcessor::computeBinValue(long binEndSampleCt, int8_t& direction
 		m_baselineMean += delta / static_cast<double>(m_baselineBinsSeen);
 		const double delta2 = x - m_baselineMean;
 		m_baselineM2 += delta * delta2;
+
+		// -----------------------------------------------------------------------------------------
+		// Auto-freeze the baseline after sdm_baseline_min_seconds with calculated mean/sd in case of no manual input
+		const long binsNeeded = std::max<long>(1, static_cast<long>(std::llround(
+			(static_cast<double>(m_baselineMinSeconds) * 1000.0) / static_cast<double>(m_binMs))));
+		if (m_baselineBinsSeen >= binsNeeded) {
+			const double variance = (m_baselineBinsSeen > 1)
+				? (m_baselineM2 / static_cast<double>(m_baselineBinsSeen - 1)) : 0.0;
+			double sd = std::sqrt(variance);
+			if (!(sd > 0.0))
+				sd = 1.0; // guard: zero/undefined variance (e.g., constant counts)
+			m_manualMean.store(m_baselineMean);
+			m_manualSd.store(sd);
+			m_baselineFrozen.store(true);
+
+			//// Diagnostic
+			//std::cout << "[SDM] Auto-baseline frozen after " << m_baselineBinsSeen
+			//          << " bins: mean=" << m_baselineMean << " sd=" << sd
+			//          << " (z=" << m_triggerZ << " -> threshold "
+			//          << (m_baselineMean + static_cast<double>(m_triggerZ) * sd)
+			//          << " counts/bin)" << std::endl;
+			// -----------------------------------------------------------------------------------------
+		}
 
 		direction = 0;
 		return 0.0f;
@@ -130,3 +161,5 @@ float ZScoreSdmProcessor::computeBinValue(long binEndSampleCt, int8_t& direction
 
 	return static_cast<float>(zVal);
 }
+
+REGISTER_SDM_PROCESSOR("zscore", ZScoreSdmProcessor);

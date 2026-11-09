@@ -21,6 +21,8 @@ public:
 
 	float computeBinValue(long binEndSampleCt, int8_t& direction) override;
 
+	bool useTcp() const override { return true; }
+	void sendConnectHello(Sock& /*sdmSock*/) override {} // hello waits for the template count (sendHello)
 	void sendHello(Sock& sdmSock) override;
 	void sendPacket(Sock& sdmSock, uint64_t glxSampleCt, long binEndSampleCt) override;
 	void onBatchComplete(Sock& sdmSock, uint64_t glxSampleCt, long streamSampleCt) override;

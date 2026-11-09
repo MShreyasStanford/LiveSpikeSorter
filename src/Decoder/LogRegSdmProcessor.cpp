@@ -206,23 +206,23 @@ void LogRegSdmProcessor::init(const InputParameters& params,
 	const std::unordered_set<long>* filter = m_subsetChannels.empty() ? nullptr : &m_subsetChannels;
 
 	// Determine window parameters for the SDM decoder binner
-	// sdmDecoderWindowMs controls how many ms of spikes feed the feature vector
-	int windowMs = params.sdmDecoderWindowMs;
+	SdmParams p(params.mapSdmParams);
+	int windowMs = p.getInt("window_ms", 300);
 	int samplesPerMs = static_cast<int>(params.fImecSamplingRate / 1000.0f);
 	int windowLength = windowMs * samplesPerMs;
 	int binLength = params.sdmTriggerBinMs * samplesPerMs;
 	int windowOffset = windowLength; // no offset for SDM (predict at current time)
 
 	// Train from offline data files
-	if (!params.sSdmSpikesFile.empty() && !params.sSdmEventFile.empty()) {
-		std::string workFolder = params.sSdmDecoderWorkFolder.empty()
-		                         ? params.sDecoderWorkFolder
-		                         : params.sSdmDecoderWorkFolder;
-		trainFromFiles(params.sSdmSpikesFile, params.sSdmEventFile, workFolder,
+	const std::string spikesFile = p.getString("spikes_file");
+	const std::string eventFile = p.getString("event_file");
+	if (!spikesFile.empty() && !eventFile.empty()) {
+		const std::string workFolder = p.getString("work_folder", params.sDecoderWorkFolder);
+		trainFromFiles(spikesFile, eventFile, workFolder.empty() ? params.sDecoderWorkFolder : workFolder,
 		               windowLength, binLength, windowOffset, filter);
 	} else {
 		std::cerr << "LogRegSdmProcessor: No training files specified. "
-		          << "Use --sdm_spikes_file and --sdm_event_file." << std::endl;
+		          << "Set spikes_file and event_file for 'logreg' in the launcher." << std::endl;
 	}
 
 	// Create runtime binner for streaming spike accumulation
@@ -273,3 +273,5 @@ float LogRegSdmProcessor::computeBinValue(long /*binEndSampleCt*/, int8_t& direc
 	direction = (prob > 0.5) ? 1 : 0;
 	return static_cast<float>(prob);
 }
+
+REGISTER_SDM_PROCESSOR("logreg", LogRegSdmProcessor);

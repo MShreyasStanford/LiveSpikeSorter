@@ -277,14 +277,16 @@ Python/
 !src/Python/
 !src/Python/run_online_spikes.py
 
-# Python virtual environment — exclude everything except the modified Kilosort package
-src/Python/run_online_spikes/*
-!src/Python/run_online_spikes/Lib/
-src/Python/run_online_spikes/Lib/*
-!src/Python/run_online_spikes/Lib/site-packages/
-src/Python/run_online_spikes/Lib/site-packages/*
-!src/Python/run_online_spikes/Lib/site-packages/kilosort/
-!src/Python/run_online_spikes/Lib/site-packages/kilosort-4.0.13.dist-info/
+# The Python environment spec is source, despite the global *.txt rule above.
+# Root-anchored: there is exactly one, at the repo root.
+!/requirements.txt
+
+# The vendored Kilosort fork (External/Kilosort) is source, not build output.
+# Keep its bundled template file despite the global *.npz rule above.
+!External/Kilosort/kilosort/wTEMP.npz
+# ...but pip build artifacts from installing it are not source.
+External/Kilosort/build/
+External/Kilosort/*.egg-info/
 src/Python/.ipynb_checkpoints/
 src/Python/run_phy/
 
@@ -293,3 +295,9 @@ methods_section_draft.txt
 
 # Claude Code
 .claude/
+
+# Vendored Kilosort fork
+/External/Kilosort/build/
+/External/Kilosort/kilosort.egg-info/
+# Keep package data assets the global *.npz / *.npy rules would drop
+!/External/Kilosort/kilosort/wTEMP.npz

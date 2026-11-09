@@ -157,3 +157,5 @@ void BinCountSdmProcessor::onBatchComplete(Sock& sdmSock, uint64_t glxSampleCt, 
 
 	sdmSock.sendData(buf.data(), static_cast<uint>(buf.size()));
 }
+
+REGISTER_SDM_PROCESSOR("bincounts", BinCountSdmProcessor);

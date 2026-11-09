@@ -6,6 +6,7 @@ typedef unsigned short  uint16;
 #include <string>
 #include <vector>
 #include <map>
+#include <limits>
 
 struct InputParameters {
 	std::string					sInputFolder{},
@@ -20,12 +21,10 @@ struct InputParameters {
 								sOSSOutputFolder{},
 								sdmIP{},
 								sdmProcessorType{ "zscore" },
-								sSdmSpikesFile{},
-								sSdmEventFile{},
-								sSdmDecoderWorkFolder{};
+								sSpikeStreamAddr{};   // "host:port" for the public UDP spike stream; empty = off
 
-	uint16						uDataAccquisitionPort,
-								uSelectedDevice;
+	uint16						uDataAccquisitionPort{ 0 },
+								uSelectedDevice{ 0 };
 
 	std::vector<uint16>			vSelectedDevices,
 								vChannelSubset;
@@ -36,14 +35,17 @@ struct InputParameters {
 								mapDecoderInputFolders,
 								mapSpikeFiles;
 
+	// imec probe substream: substream N = imecN
+	std::map<uint16, int>		mapDeviceSubstreams;
+
 	double						dTau,
 								dThreshold,
 								dRatioToMax;
 
-	float						sdmTriggerZ{ 1.0f },
-								sdmBaselineMinSeconds{ 10.0f };
-	int							sdmTriggerBinMs{ 50 },
-								sdmDecoderWindowMs{ 300 };
+	int							sdmTriggerBinMs{ 50 };
+
+	// Settings owned by processor
+	std::map<std::string, std::string>	mapSdmParams;
 
 	float						fImecSamplingRate,
 								fNidqSamplingRate,
@@ -56,7 +58,7 @@ struct InputParameters {
 								iConvolutionTimes,
 								iDownsampling,
 								iMaxIts,
-								iTimeBehind,
+								iTimeBehind{ 0 },     // Allowed lag
 								iAvgWindowTime,
 								iRedundancy,
 								iWindowLength,
@@ -68,8 +70,17 @@ struct InputParameters {
 	bool						bReadFromFile,
 								bIsDecoding,
 								bIsSendingFeedback,
-								bSmallskip;
-
+								bSmallskip{ false };  // when lag exceeds iTimeBehind: skip only to the lag limit
 	uint16_t					sdmPort{};
+
+	// Skip the ImGui input window and use CLI-populated params directly
+	bool						bSkipInputGui{ false };
+
+	// For (live) (rigid) drift estimation
+	bool						bDriftEstimation{ false };
+	float						fDriftWindowSeconds{ 10.0f };
+	float						fDriftMaxShiftUm{ 50.0f };
+	// Suggestion threshold (for retraining)
+	float						fDriftRetrainThresholdUm{ 50.0f };
 };
 #endif

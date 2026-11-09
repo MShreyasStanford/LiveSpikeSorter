@@ -5,6 +5,7 @@
 #include <random>
 #include <future>
 #include <fstream>
+#include <unordered_map>
 
 #include <cublas_v2.h>
 #include <cusolverDn.h>
@@ -19,8 +20,10 @@
 #include "../Networking/Sock.h"
 #include "../Networking/sorterParameters.h"
 #include "../Networking/FragmentManager.h"
+#include "../Networking/SpikeStream.h"
 #include "OnlineSpikesV2MemoryList.h"
 #include "TensorWrapper.h"
+#include "DriftEstimator.h"
 
 #include <thrust/device_vector.h>
 #include <thrust/copy.h>
@@ -45,6 +48,7 @@ private:
 	void loadWhitening(std::string filepath);
 	void loadChannelMap(std::string filepath);
 	void loadTemplateMap(std::string filepath);
+	void loadCarGroups(std::string filepath);
 	void loadKilosortTrainingData(std::string directoryPath);
 	void loadKilosortClusteringData(std::string directoryPath);
 
@@ -58,12 +62,16 @@ private:
 	void highpassFilter(float* d_batch, int C, int currBatchNumSamples, float sampling_freq, float frequency_low);
 	int closestCluster(const float x, const float y);
 
+	// Drift retrain
+	void handleRetrainRequest(const OSSSpecificParams& osParams);
+	// ---------------------------------------------------------------
 	SorterParameters getSorterParams();
 	void writeSpikesToFile(std::vector<long> spikeTimes, std::vector<long> spikeTemplates, std::vector<float> spikeAmplitudes);
-	void saveSpikes(long lNInds, long lStreamSampleCtOffset, long lEndValid, std::vector<long>& Times, std::vector<long>& Templates, std::vector<float>& Amplitudes);
+	void saveSpikes(long lNInds, long lStreamSampleCtOffset, long lEndValid, std::vector<long>& Times, std::vector<long>& Templates, std::vector<float>& Amplitudes, std::vector<float>& MatchScores);
 
 	// Debug
 	std::string ossOutputDir;
+	std::string ossInputDir;   // oss_input/ path
 	std::ofstream spikesFileOut;
 	long recordingOffset;
 
@@ -79,6 +87,15 @@ private:
 	cublasHandle_t		cublasHandle; // handle for cublas computations
 	cusolverDnHandle_t  cuSolverHandle; // handle for cusolver computations
 	int filterLen;
+
+	// Cached cuFFT plans for highpassFilter(), this should cap VRAM usage so it stops increasing with recording duration
+	struct HpFftPlans {
+		cufftHandle fwdBatch;
+		cufftHandle fwdFilter;
+		cufftHandle invBatch;
+		bool created = false;
+	};
+	std::unordered_map<int, HpFftPlans> m_hpPlanCache;
 
 	static const int NOT_MAPPED = -1;
 	long K; // number of principal components
@@ -109,6 +126,12 @@ private:
 	std::vector<float> ys;
 	std::vector<long> lastSpikeTime; // size T: will remove duplicate spikes
 
+	// Grouped common median reference (car_groups.npy). carNumGroups <= 1: one global median.
+	int  carNumGroups = 1;
+	int  carSortLen = 0;            // next power of two >= largest group
+	int* d_carOffsets = nullptr;    // carNumGroups + 1
+	int* d_carMembers = nullptr;    // C channel rows, grouped
+
 	// Device pointers
 	float p2p;
 	long ctDc; // no idea what this is supposed to mean
@@ -125,9 +148,13 @@ private:
 	sockaddr_in decoderImecAddr;
 	sockaddr_in decoderNidqAddr;
 	DataSocket* sglxSock;
+	SpikeStream spikeStream; 
 
 	// Leftover stuff from previous code
 	std::vector<double> activeChannels;
+
+	// Live rigid drift estimation. Stays inert
+	DriftEstimator driftEstimator;
 
 	// Thrust vector for matching to find local maxima, change later to normal device vector
 	thrust::device_vector<long> d_spikeIndices;

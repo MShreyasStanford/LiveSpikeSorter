@@ -14,12 +14,12 @@ public:
 	//bool   connect();
 	//void   disconnect();
 
-	t_ull   getStreamSampleCt(int streamType);
-	//t_ull   fetchLatest(float *fData, t_ull lStartCt = ULLONG_MAX);
+	t_ull   getStreamSampleCt(int streamType, OSSSpecificParams osParams);
+	t_ull   fetchLatest(float *fData, OSSSpecificParams osParams, t_ull lStartCt = ULLONG_MAX);
 	t_ull	fetchLatest_TC(float *fData, OSSSpecificParams osParams, t_ull lStartCt = ULLONG_MAX);
-	//t_ull   fetchFromPlace(float *fData, t_ull lStartCt);
-	//t_ull	initNidqStream();
-	//t_ull	fetchEventInfo(int &eventLabel, t_ull lStartCt);
+	t_ull   fetchFromPlace(float *fData, OSSSpecificParams osParams, t_ull lStartCt);
+	t_ull	initNidqStream();
+	t_ull	fetchEventInfo(int &eventLabel, t_ull lStartCt, OSSSpecificParams osParams);
 
 	bool   startRun();
 

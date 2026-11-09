@@ -2,8 +2,12 @@
 #define SDM_PROCESSOR_H_
 
 #include <vector>
+#include <string>
+#include <memory>
+#include <functional>
 #include <cstdint>
 #include "../Networking/inputParameters.h"
+#include "SdmParams.h"
 
 class Sock;
 
@@ -11,7 +15,6 @@ class SdmProcessor {
 public:
 	virtual ~SdmProcessor() = default;
 
-	// Called once at startup with config and the activity subset channels
 	virtual void init(const InputParameters& params,
 	                  const std::vector<long>& activitySubset) = 0;
 
@@ -24,8 +27,10 @@ public:
 	// Sets `direction` (1 = above threshold, 0 = below, -1 = below negative threshold)
 	virtual float computeBinValue(long binEndSampleCt, int8_t& direction) = 0;
 
-	// Called once after connection to send a hello/handshake packet.
-	// Default: no-op (zscore/logreg use the existing 13-byte hello in Decoder).
+	virtual bool useTcp() const;
+
+	virtual void sendConnectHello(Sock& sdmSock);
+
 	virtual void sendHello(Sock& sdmSock);
 
 	// Called at each bin boundary to send the SDM packet.
@@ -40,5 +45,19 @@ public:
 	// template count loaded from disk.  Default: no-op.
 	virtual void setNumTemplates(long numTemplates);
 };
+
+
+using SdmProcessorFactory = std::function<std::unique_ptr<SdmProcessor>()>;
+
+struct SdmProcessorRegistrar {
+	SdmProcessorRegistrar(const std::string& name, SdmProcessorFactory factory);
+};
+
+std::unique_ptr<SdmProcessor> createSdmProcessor(const std::string& name);
+
+std::vector<std::string> registeredSdmProcessors();
+
+#define REGISTER_SDM_PROCESSOR(name, cls) \
+	static SdmProcessorRegistrar s_sdmRegistrar_##cls(name, [] { return std::unique_ptr<SdmProcessor>(new cls()); })
 
 #endif /* SDM_PROCESSOR_H_ */

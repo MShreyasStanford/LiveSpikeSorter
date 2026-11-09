@@ -56,7 +56,7 @@ private:
 
 	Sock m_imecSock; 
 	Sock m_nidqSock;
-	Sock m_sdmSock; // connected to stimulus display machine
+	std::unique_ptr<Sock> m_sdmSock; // connected to SDM; TCP/UDP chosen by the processor
 	FragmentManager imecFm;
 	FragmentManager nidqFm;
 

@@ -741,7 +741,7 @@ class BinaryFiltered(BinaryRWFile):
                  device: torch.device = None, do_CAR: bool = True,
                  artifact_threshold: float = np.inf, invert_sign: bool = False,
                  dtype=None, tmin: float = 0.0, tmax: float = np.inf,
-                 shift=None, scale=None, file_object=None):
+                 shift=None, scale=None, file_object=None, car_groups=None):
 
         super().__init__(filename, n_chan_bin, fs, NT, nt, nt0min, device,
                          dtype=dtype, tmin=tmin, tmax=tmax, shift=shift,
@@ -751,6 +751,12 @@ class BinaryFiltered(BinaryRWFile):
         self.hp_filter = hp_filter
         self.dshift = dshift
         self.do_CAR = do_CAR
+        self.car_index = None
+        if car_groups is not None:
+            groups = np.asarray(car_groups).ravel()
+            if np.unique(groups).size > 1:
+                self.car_index = [torch.from_numpy(np.flatnonzero(groups == g)).to(device)
+                                  for g in np.unique(groups)]
         self.invert_sign=invert_sign
         self.artifact_threshold = artifact_threshold
 
@@ -763,7 +769,11 @@ class BinaryFiltered(BinaryRWFile):
             X = X * -1
 
         X = X - X.mean(1).unsqueeze(1)
-        if self.do_CAR:
+        if self.do_CAR and self.car_index is not None:
+            # median across the channels of each group
+            for idx in self.car_index:
+                X[idx] = X[idx] - torch.median(X[idx], 0)[0]
+        elif self.do_CAR:
             # remove the mean of each channel, and the median across channels
             X = X - torch.median(X, 0)[0]
     

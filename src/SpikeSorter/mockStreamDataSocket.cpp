@@ -20,7 +20,7 @@ bool MockStreamDataSocket::startRun() {
 	return true;
 }
 
-t_ull MockStreamDataSocket::getStreamSampleCt(int streamType) {
+t_ull MockStreamDataSocket::getStreamSampleCt(int streamType, OSSSpecificParams osParams) {
 	return m_lLatestCt;
 }
 
@@ -37,4 +37,23 @@ t_ull MockStreamDataSocket::fetchLatest_TC(float *fData, OSSSpecificParams osPar
 	m_lLatestCt += m_lMaxSize;
 
 	return m_lLatestCt, m_lMaxSize;
+}
+
+// Template-matching path uses the same random replay as fetchLatest_TC.
+t_ull MockStreamDataSocket::fetchLatest(float *fData, OSSSpecificParams osParams, t_ull lStartCt) {
+	return fetchLatest_TC(fData, osParams, lStartCt);
+}
+
+t_ull MockStreamDataSocket::fetchFromPlace(float *fData, OSSSpecificParams osParams, t_ull lStartCt) {
+	return fetchLatest_TC(fData, osParams, lStartCt);
+}
+
+t_ull MockStreamDataSocket::initNidqStream() {
+	return 0;
+}
+
+// Mock has no digital events; report none.
+t_ull MockStreamDataSocket::fetchEventInfo(int &eventLabel, t_ull lStartCt, OSSSpecificParams osParams) {
+	eventLabel = 0;
+	return m_lLatestCt;
 }

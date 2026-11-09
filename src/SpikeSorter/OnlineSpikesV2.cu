@@ -16,9 +16,11 @@
 #include <algorithm>
 #include <typeinfo>
 #include <vector>
+#include <map>
 #include <thread>
 #include "../Helpers/Timer.h"
 #include <fstream>
+#include <experimental/filesystem>
 
 #ifdef WINDOWS
 #include <windows.h>
@@ -40,6 +42,7 @@
 #include "../NetClient/NetClient.h"
 #include "myCudnnConvolution.h"
 #include "SorterHelpers.h"
+#include "../Helpers/RetrainSignal.h"
 
 #include <atomic>
 #include <mutex>
@@ -99,13 +102,14 @@ __global__ void fwd_max_pool_1d_kernel(float* __restrict__ d_matrix, float* __re
 	}
 }
 
-__global__ void compute_amps_kernel(const float* __restrict__ d_B, const float* __restrict__ d_nm, const long* __restrict__ d_spikeIndices, float* d_result, long numSpikes, long T, long W) {
+__global__ void compute_amps_kernel(const float* __restrict__ d_B, const float* __restrict__ d_nm, const long* __restrict__ d_spikeIndices, float* d_result, const float* __restrict__ d_Cf, float* d_score, long numSpikes, long T, long W) {
 	int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx < numSpikes) {
 		long spikeIdx = d_spikeIndices[idx];
 		long sampleIdx = spikeIdx % W;
 		long templateIdx = spikeIdx / W;
 		d_result[idx] = d_B[templateIdx * W + sampleIdx] * d_nm[templateIdx];
+		d_score[idx] = d_Cf[spikeIdx];
 	}
 }
 
@@ -268,7 +272,8 @@ OnlineSpikesV2::OnlineSpikesV2(
 	W(params.iMinScanWindow + params.iMaxScanWindow),
 	rootMeanSquared(0),
 	ossOutputDir(params.sOSSOutputFolder),
-	spikesFileOut(ossOutputDir + "spikeOutput.txt"),
+	ossInputDir(params.sInputFolder),
+	spikesFileOut(),
 	recordingOffset(0),
 	substream(params.iSubstream),
 	lookback(0) // this will be set when we read in M
@@ -277,6 +282,7 @@ OnlineSpikesV2::OnlineSpikesV2(
 
 	initializeSorter(params);
 	establishDecoderConnection(mainAddr);
+	spikeStream.open(params.sSpikeStreamAddr, params.uSelectedDevice, static_cast<uint16_t>(params.iSubstream));
 }
 
 OnlineSpikesV2::~OnlineSpikesV2()
@@ -314,13 +320,53 @@ OnlineSpikesV2::~OnlineSpikesV2()
 		MEMORY_VARIABLES
 	#undef X
 
+	// Destroy the cached high-pass cuFFT plans (see highpassFilter)
+	for (auto& kv : m_hpPlanCache) {
+		cufftDestroy(kv.second.fwdBatch);
+		cufftDestroy(kv.second.fwdFilter);
+		cufftDestroy(kv.second.invBatch);
+	}
+	m_hpPlanCache.clear();
+
+	if (d_carOffsets) { _CUDA_CALL(cudaFree(d_carOffsets)); d_carOffsets = nullptr; }
+	if (d_carMembers) { _CUDA_CALL(cudaFree(d_carMembers)); d_carMembers = nullptr; }
+
 	// Close files and perform other cleanup
 	spikesFileOut.close();
 }
 
 void OnlineSpikesV2::initializeSorter(InputParameters params) {
 	static const char* ptLabel = { "OnlineSpikesV2::initializeSorter" };
-	std::cout << "Writing spikes to " << ossOutputDir << "spikeOutput.txt" << std::endl;
+	// Ensure output directory exists and open the spike output file
+	{
+		namespace fs = std::experimental::filesystem;
+		fs::path outputDir(ossOutputDir);
+		if (!ossOutputDir.empty() && !fs::exists(outputDir)) {
+			std::cout << "Creating output directory: " << ossOutputDir << std::endl;
+			fs::create_directories(outputDir);
+		}
+
+		std::string spikesFilePath = ossOutputDir + "spikeOutput.txt";
+
+		// If a previous spikeOutput.txt exists, rename it with an incremented suffix
+		if (fs::exists(spikesFilePath)) {
+			int suffix = 1;
+			std::string renamedPath;
+			do {
+				renamedPath = ossOutputDir + "spikeOutput_" + std::to_string(suffix) + ".txt";
+				suffix++;
+			} while (fs::exists(renamedPath));
+			std::cout << "Renaming existing " << spikesFilePath << " -> " << renamedPath << std::endl;
+			fs::rename(spikesFilePath, renamedPath);
+		}
+
+		spikesFileOut.open(spikesFilePath);
+		if (!spikesFileOut.is_open()) {
+			std::cerr << "ERROR: Failed to open spike output file: " << spikesFilePath << std::endl;
+			throw std::runtime_error("Failed to open spike output file: " + spikesFilePath);
+		}
+		std::cout << "Writing spikes to " << spikesFilePath << std::endl;
+	}
 
 	// Set CUDA device to the one that was chosen
 	setDevice(params.uSelectedDevice, &cudnnConvObj);
@@ -349,6 +395,16 @@ void OnlineSpikesV2::initializeSorter(InputParameters params) {
 
 	// No idea what this does ngl
 	for (int i = 0; i < C; i++) activeChannels.push_back(i);
+
+	// --- Live rigid drift estimation ---
+	DriftParams driftParams;
+	driftParams.enabled = params.bDriftEstimation;
+	driftParams.windowSeconds = params.fDriftWindowSeconds;
+	driftParams.maxShiftUm = params.fDriftMaxShiftUm;
+
+	driftEstimator.load(params.sInputFolder, C, W, params.uSelectedDevice,
+	                    samplingRate, d_xc, d_yc, d_driftMatrix, d_driftMatrixB,
+	                    driftParams);
 }
 
 void OnlineSpikesV2::establishDecoderConnection(sockaddr_in mainAddr)
@@ -472,6 +528,7 @@ void OnlineSpikesV2::initializeStaticMemory(InputParameters params)
 	static const char *ptLabel = { "OnlineSpikesV2::initializeStaticMemory" };
 
 	loadChannelMap(params.sInputFolder + "channelMap.npy");
+	loadCarGroups(params.sInputFolder + "car_groups.npy");
 	loadTemplates(params.sInputFolder + "templates.npy");
 	loadWhitening(params.sInputFolder + "whiteningMat.npy");
 	loadTemplateMap(params.sInputFolder + "templateMap.npy");
@@ -533,6 +590,55 @@ void OnlineSpikesV2::loadChannelMap(std::string filepath)
 		_RUN_ERROR(ptLabel, "loadChannelMap: Wrong size, size should be: " + std::to_string(C) + ", but is: " + std::to_string(npChannelMap.shape[0]));
 
 	memcpy(channelMap.data(), npChannelMap.data<int>(), C * sizeof(int));
+}
+
+// Channel groups for common median referencing, one group id per channel row (int32, size C).
+void OnlineSpikesV2::loadCarGroups(std::string filepath)
+{
+	static const char *ptLabel = { "OnlineSpikesV2::loadCarGroups" };
+	namespace fs = std::experimental::filesystem;
+
+	carNumGroups = 1;
+	if (!fs::exists(filepath)) {
+		std::cout << "No car_groups.npy found: using global median reference." << std::endl;
+		return;
+	}
+
+	cnpy::NpyArray npGroups = cnpy::npy_load(filepath);
+	if (npGroups.word_size != sizeof(int) || npGroups.shape.size() != 1 || npGroups.shape[0] != C)
+		_RUN_ERROR(ptLabel, "car_groups.npy must be int32 with " + std::to_string(C) + " entries");
+	const int* groups = npGroups.data<int>();
+
+	// Bucket channel rows by group id (ids need not be contiguous)
+	std::map<int, std::vector<int>> buckets;
+	for (int c = 0; c < C; c++)
+		buckets[groups[c]].push_back(c);
+
+	if (buckets.size() <= 1) {
+		std::cout << "car_groups.npy has one group: using global median reference." << std::endl;
+		return;
+	}
+
+	std::vector<int> offsets{ 0 }, members;
+	size_t maxGroup = 0;
+	for (auto& kv : buckets) {
+		members.insert(members.end(), kv.second.begin(), kv.second.end());
+		offsets.push_back((int)members.size());
+		if (kv.second.size() > maxGroup) maxGroup = kv.second.size();
+	}
+	carSortLen = 1;
+	while (carSortLen < (int)maxGroup) carSortLen *= 2;
+	if (carSortLen > 1024)
+		_RUN_ERROR(ptLabel, "car_groups.npy: largest group exceeds 1024 channels");
+	carNumGroups = (int)buckets.size();
+
+	_CUDA_CALL(cudaMalloc((void**)&d_carOffsets, offsets.size() * sizeof(int)));
+	_CUDA_CALL(cudaMalloc((void**)&d_carMembers, members.size() * sizeof(int)));
+	_CUDA_CALL(cudaMemcpy(d_carOffsets, offsets.data(), offsets.size() * sizeof(int), cudaMemcpyHostToDevice));
+	_CUDA_CALL(cudaMemcpy(d_carMembers, members.data(), members.size() * sizeof(int), cudaMemcpyHostToDevice));
+
+	std::cout << "Grouped median reference: " << carNumGroups << " groups, largest " << maxGroup
+	          << " channels (sort width " << carSortLen << ")." << std::endl;
 }
 
 void OnlineSpikesV2::loadTemplateMap(std::string filepath)
@@ -629,6 +735,92 @@ void OnlineSpikesV2::loadKilosortClusteringData(std::string directoryPath)
 	}
 }
 
+// Escape a string for embedding in JSON (Windows paths carry backslashes).
+static std::string jsonEscape(const std::string& s) {
+	std::string out;
+	out.reserve(s.size() + 8);
+	for (char c : s) {
+		switch (c) {
+			case '\\': out += "\\\\"; break;
+			case '"':  out += "\\\""; break;
+			case '\n': out += "\\n";  break;
+			case '\r': out += "\\r";  break;
+			case '\t': out += "\\t";  break;
+			default:   out += c;      break;
+		}
+	}
+	return out;
+}
+
+// Drift retrain
+void OnlineSpikesV2::handleRetrainRequest(const OSSSpecificParams& osParams)
+{
+	namespace fs = std::experimental::filesystem;
+
+	std::cout << "[Retrain] Request received. Querying SpikeGLX save state..." << std::endl;
+
+	RetrainSaveInfo info;
+	bool ok = sglxSock->getSaveInfo(info, osParams);
+
+	if (!ok) {
+		std::cerr << "[Retrain] Could not read SpikeGLX save state; aborting retrain, continuing to sort." << std::endl;
+		g_retrainRequested.store(false);
+		return;
+	}
+	if (!info.saving) {
+		std::cerr << "[Retrain] SpikeGLX is not saving to disk -- nothing to retrain on. "
+		             "Enable Save in SpikeGLX and try again. Continuing to sort." << std::endl;
+		g_retrainRequested.store(false);
+		return;
+	}
+
+	t_ull fileSampleCount = (info.sampleCount >= info.fileStart)
+	                        ? (info.sampleCount - info.fileStart) : 0;
+
+	std::cout << "[Retrain] dataDir=" << info.dataDir
+	          << " runName=" << info.runName
+	          << " substream=" << osParams.substream
+	          << " fileStart=" << info.fileStart
+	          << " sampleCount=" << info.sampleCount
+	          << " fileSampleCount=" << fileSampleCount << std::endl;
+
+	if (!sglxSock->finalizeRecording())
+		std::cerr << "[Retrain] Warning: sglx_setRecordingEnable(false) failed; the file may not be finalized." << std::endl;
+
+	std::string sentinelPath = ossInputDir + "retrain_request.json";
+	std::ofstream out(sentinelPath, std::ios::trunc);
+	if (!out) {
+		std::cerr << "[Retrain] Could not open " << sentinelPath
+		          << " for writing; aborting retrain, continuing to sort." << std::endl;
+		g_retrainRequested.store(false);
+		return;
+	}
+
+	out << "{\n";
+	out << "  \"saving\": true,\n";
+	out << "  \"data_dir\": \""  << jsonEscape(info.dataDir) << "\",\n";
+	out << "  \"run_name\": \""  << jsonEscape(info.runName) << "\",\n";
+	out << "  \"substream\": "   << osParams.substream       << ",\n";
+	out << "  \"file_start\": "  << info.fileStart           << ",\n";
+	out << "  \"sample_count\": "<< info.sampleCount         << ",\n";
+	out << "  \"file_sample_count\": " << fileSampleCount     << ",\n";
+	out << "  \"sglx_params\": {";
+	bool first = true;
+	for (const auto& kv : info.params) {
+		out << (first ? "\n" : ",\n");
+		out << "    \"" << jsonEscape(kv.first) << "\": \"" << jsonEscape(kv.second) << "\"";
+		first = false;
+	}
+	out << (first ? "" : "\n") << "  }\n";
+	out << "}\n";
+	out.close();
+
+	std::cout << "[Retrain] Wrote " << sentinelPath
+	          << ". Stopping sorter for retraining." << std::endl;
+
+	std::exit(RETRAIN_EXIT_CODE);
+}
+
 void OnlineSpikesV2::runSpikeSorting()
 {
 	static const char *ptLabel = { "OnlineSpikesV2::runSpikeSorting" };
@@ -651,6 +843,7 @@ void OnlineSpikesV2::runSpikeSorting()
 	std::vector<long> times;
 	std::vector<long> templates;
 	std::vector<float> amplitudes;
+	std::vector<float> matchScores;
 	memset(lastSpikeTime.data(), 0, sizeof(long) * T);
 
 	// Parameters specific to each individual OSS during parallelization
@@ -666,6 +859,11 @@ void OnlineSpikesV2::runSpikeSorting()
 
 	// Main spike sorting loop
 	while (true) {
+		// Check if retrain was requested
+		if (g_retrainRequested.load()) {
+			handleRetrainRequest(osParams);
+		}
+
 		// Wait until the minimum time window has passed before processing
 		sglxSock->waitUntil(latestCt + minWindow, osParams);
 		
@@ -751,7 +949,10 @@ void OnlineSpikesV2::runSpikeSorting()
 		// Median removal
 		{
 			Timer timer("medianRemove()");
-			medianRemove(d_fetchBuf, C, currBatchNumSamples);
+			if (carNumGroups > 1)
+				groupedMedianRemove(d_fetchBuf, C, currBatchNumSamples, d_carOffsets, d_carMembers, carNumGroups, carSortLen);
+			else
+				medianRemove(d_fetchBuf, C, currBatchNumSamples);
 		}
 		_CUDA_CALL(cudaDeviceSynchronize());
 
@@ -770,14 +971,27 @@ void OnlineSpikesV2::runSpikeSorting()
 		}
 		_CUDA_CALL(cudaDeviceSynchronize());
 
-		// Drift correct
+		// Estimate drift from the whitened (UNCORRECTED) batch.
+		//
+		// ORDER MATTERS d_fetchBuf currently holds the whitened data, and the correction below writes d_fetchBuf2
+		// Measuring here keeps the estimator open loop it sees the drift that is still in the data, not the residual 
+		// after our own correction. Measuring after the correction will read a flat trace no matter how much the
+		// probe actually moved.
+		if (driftEstimator.isEnabled()) {
+			Timer timer("driftEstimation()");
+			driftEstimator.detectAndAccumulate(d_fetchBuf, currBatchNumSamples, latestCt);
+			_CUDA_CALL(cudaDeviceSynchronize());
+		}
+
+		// Drift correct. The matrix is double-buffered and hot-swapped by the drift worker, read the pointer once per batch.
 		{
 			Timer timer("driftCorrection()");
-			matMul(cublasHandle, d_driftMatrix, d_fetchBuf, d_fetchBuf2, C, C, currBatchNumSamples);
+			const float* driftMat = driftEstimator.activeDriftMatrix();
+			matMul(cublasHandle, driftMat, d_fetchBuf, d_fetchBuf2, C, C, currBatchNumSamples);
 		}
 		_CUDA_CALL(cudaDeviceSynchronize());
 		
-		// Perform OMP
+		// OMP
 		numSpikes = kilosortMatchingPursuit(d_fetchBuf2, currBatchNumSamples);
 
 		// Use results of OMP to assign unmapped spike templates to the closest clusters
@@ -789,23 +1003,54 @@ void OnlineSpikesV2::runSpikeSorting()
 		}
 
 		// Save the spikes into times, templates, amplitudes
-		saveSpikes(numSpikes, latestCt - currBatchNumSamples + 1, currBatchNumSamples - minWindow, times, templates, amplitudes);
+		const long batchStartCt = latestCt - currBatchNumSamples + 1;
+		const long batchValidLen = currBatchNumSamples - minWindow; // spikes past this are deferred to the next batch
+		saveSpikes(numSpikes, batchStartCt, batchValidLen, times, templates, amplitudes, matchScores);
 
 		clock_gettime(batchAfter);
 		long processTime = GetTimeDiff(batchAfter, batchBefore);
 
 		// Send relevant data to decoder
-		OnlineSpikesPayload payload = { recordingOffset, 
+		OnlineSpikesPayload payload = { recordingOffset,
 								latestCt,
 								times,
 								templates,
 								amplitudes,
 								rootMeanSquared,
 								p2p,
-								processTime 
+								processTime
 		};
 
+		payload.MatchScores = matchScores;
+
+		// // ----------------------------------------------------------------
+		// // DIAGNOSTIC TEMP verification probe -- delete this once confirmed.
+		// if (!matchScores.empty()) {
+		// 	auto mm = std::minmax_element(matchScores.begin(), matchScores.end());
+		// 	std::cout << "[MatchScore] n=" << matchScores.size() << "/" << times.size()
+		// 	          << " min=" << *mm.first << " max=" << *mm.second << std::endl;
+		// }
+		// // ----------------------------------------------------------------
+
+
+		// Latest drift estimate.
+		{
+			DriftStatus ds = driftEstimator.status();
+			payload.driftShiftUm = ds.shiftUm;
+			payload.driftUpdateCt = ds.updateCt;
+		}
+
 		sendPayload(&imecFm, payload, decoderImecAddr);
+
+		// Public spike stream (no-op unless --spike_stream). Sent every batch, even with zero spikes.
+		if (spikeStream.isEnabled()) {
+			const long long processUs = static_cast<long long>(batchAfter.tv_sec - batchBefore.tv_sec) * 1'000'000
+				+ (batchAfter.tv_nsec - batchBefore.tv_nsec) / 1'000;
+			spikeStream.sendBatch(times, templates, amplitudes,
+				static_cast<uint64_t>(recordingOffset + batchStartCt),
+				static_cast<uint64_t>(recordingOffset + batchStartCt + batchValidLen),
+				static_cast<uint32_t>(processUs > 0 ? processUs : 0));
+		}
 		//duplicate check in save spikes
 		// Debug
 		writeSpikesToFile(times, templates, amplitudes);
@@ -816,6 +1061,7 @@ void OnlineSpikesV2::runSpikeSorting()
 		times.clear();
 		templates.clear();
 		amplitudes.clear();
+		matchScores.clear();
 	}
 }
 
@@ -898,6 +1144,7 @@ long OnlineSpikesV2::kilosortMatchingPursuit(float* d_batch, long currBatchNumSa
 	memset(spikeTemplates, 0, unclu_T * currBatchNumSamples * sizeof(long));
 	memset(spikeTimes, 0, unclu_T * currBatchNumSamples * sizeof(long));
 	memset(spikeAmplitudes, 0, unclu_T * currBatchNumSamples * sizeof(long));
+	memset(spikeMatchScores, 0, unclu_T * currBatchNumSamples * sizeof(float));
 	d_spikeIndices.clear();
 
 	for (int j = 0; j < 50; j++) {
@@ -950,12 +1197,14 @@ long OnlineSpikesV2::kilosortMatchingPursuit(float* d_batch, long currBatchNumSa
 		{
 			Timer timer("Compute Amplitudes");
 			_CUDA_CALL(cudaMemset(d_amps, 0, unclu_T * currBatchNumSamples * sizeof(float)));
+			_CUDA_CALL(cudaMemset(d_scores, 0, unclu_T * currBatchNumSamples * sizeof(float)));
 			auto blocksPerGrid = (d_spikeIndices.size() + DEFAULT_TPB - 1) / DEFAULT_TPB;
-			compute_amps_kernel <<<blocksPerGrid, DEFAULT_TPB>>> (d_convResult, d_nm, thrust::raw_pointer_cast(d_spikeIndices.data()), d_amps, d_spikeIndices.size(), unclu_T, currBatchNumSamples);
+			compute_amps_kernel <<<blocksPerGrid, DEFAULT_TPB>>> (d_convResult, d_nm, thrust::raw_pointer_cast(d_spikeIndices.data()), d_amps, d_convNormalized, d_scores, d_spikeIndices.size(), unclu_T, currBatchNumSamples);
 			_CUDA_CALL(cudaDeviceSynchronize());
 		}
 	
 		_CUDA_CALL(cudaMemcpy(spikeAmplitudes + numSpikes - d_spikeIndices.size(), d_amps, d_spikeIndices.size() * sizeof(float), cudaMemcpyDeviceToHost));
+		_CUDA_CALL(cudaMemcpy(spikeMatchScores + numSpikes - d_spikeIndices.size(), d_scores, d_spikeIndices.size() * sizeof(float), cudaMemcpyDeviceToHost));
 		_CUDA_CALL(cudaDeviceSynchronize());
 
 		// Update the residual by removing the contribution of the spikes from both the raw batch and the convolution result.
@@ -987,29 +1236,34 @@ void OnlineSpikesV2::highpassFilter(float* d_batch, int C, int currBatchNumSampl
 	_CUDA_CALL(cudaMemcpy(d_hpFilterSub, d_hpFilterFull + cropLen, currBatchNumSamples * sizeof(float), cudaMemcpyDeviceToDevice));
 	_CUDA_CALL(cudaDeviceSynchronize());
 
-	// Grab plan for forward-FFT
+	// Fetch (or build once) the cuFFT plans for this transform length. Previously
+	// these three plans were created and destroyed every batch, which fragmented
+	// the driver's VRAM pool without bound once the batch length started varying.
+	// Same plan parameters as before -- only their lifetime changed.
 	int dims[1] = { currBatchNumSamples };
-	cufftHandle batchPlanForward;
-	cufftPlanMany(&batchPlanForward, 1, dims, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, CUFFT_C2C, C);
-
-	cufftHandle filterPlanForward;
-	cufftPlanMany(&filterPlanForward, 1, dims, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, CUFFT_C2C, 1);
+	HpFftPlans& plans = m_hpPlanCache[currBatchNumSamples];
+	if (!plans.created) {
+		if (cufftPlanMany(&plans.fwdBatch,  1, dims, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, CUFFT_C2C, C) != CUFFT_SUCCESS ||
+		    cufftPlanMany(&plans.fwdFilter, 1, dims, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, CUFFT_C2C, 1) != CUFFT_SUCCESS ||
+		    cufftPlanMany(&plans.invBatch,  1, dims, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, CUFFT_C2C, C) != CUFFT_SUCCESS) {
+			_RUN_ERROR(ptLabel, "Failed to create cuFFT plans for the high-pass filter");
+		}
+		plans.created = true;
+	}
 
 	// Lift from real to complex, d_hpworkspace will contain the frequency data at the end
 	float_to_cufftComplex(d_batch, d_hpworkspace, C * currBatchNumSamples);
 	float_to_cufftComplex(d_hpFilterSub, d_hpworkspace2, currBatchNumSamples);
 
 	// Perform FFT for filter + batch
-	cufftExecC2C(batchPlanForward,  d_hpworkspace,  d_batchFreq,    CUFFT_FORWARD);
-	cufftExecC2C(filterPlanForward, d_hpworkspace2, d_hpFilterFreq, CUFFT_FORWARD);
+	cufftExecC2C(plans.fwdBatch,  d_hpworkspace,  d_batchFreq,    CUFFT_FORWARD);
+	cufftExecC2C(plans.fwdFilter, d_hpworkspace2, d_hpFilterFreq, CUFFT_FORWARD);
 
 	// Apply filter
 	applyFilter(d_batchFreq, d_hpFilterFreq, currBatchNumSamples, C);
 
 	// Perform inverse FFT
-	cufftHandle batchPlanInverse;
-	cufftPlanMany(&batchPlanInverse, 1, dims, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, IGNORE, CUFFT_C2C, C);
-	cufftExecC2C(batchPlanInverse, d_batchFreq, d_hpworkspace, CUFFT_INVERSE);
+	cufftExecC2C(plans.invBatch, d_batchFreq, d_hpworkspace, CUFFT_INVERSE);
 
 	// Extract real part
 	cufftComplex_to_float(d_hpworkspace, d_batch, C * currBatchNumSamples);
@@ -1020,9 +1274,6 @@ void OnlineSpikesV2::highpassFilter(float* d_batch, int C, int currBatchNumSampl
 
 	_CUDA_CALL(cudaMemcpy(d_batch, d_shifted, C * currBatchNumSamples * sizeof(float), cudaMemcpyDeviceToDevice));
 	_CUDA_CALL(cudaDeviceSynchronize());
-	cufftDestroy(batchPlanForward);
-	cufftDestroy(batchPlanInverse);
-	cufftDestroy(filterPlanForward);
 }
 
 int OnlineSpikesV2::closestCluster(const float x, const float y)
@@ -1032,7 +1283,8 @@ int OnlineSpikesV2::closestCluster(const float x, const float y)
 	float min = FLT_MAX;
 	int minInd = -1;
 
-	for (int t = 0; t < unclu_T; t++) {
+	// Scan over the FINAL-cluster centroids, xs/ys come from cluster_centroids.npy
+	for (int t = 0; t < (long)xs.size(); t++) {
 		float dist = sqrt((x - xs[t]) * (x - xs[t]) + (y - ys[t]) * (y - ys[t]));
 		if (dist < min) {
 			min = dist;
@@ -1117,10 +1369,21 @@ float OnlineSpikesV2::P2P_calc(float *input, long length) {
 void OnlineSpikesV2::writeSpikesToFile(std::vector<long> times, std::vector<long> templates, std::vector<float> amplitudes) {
 	static const char *ptLabel = { "OnlineSpikesV2::writeSpikesToFile" };
 
-	for (int i = 0; i < times.size() && i < templates.size(); i++) {
-		spikesFileOut << recordingOffset + times[i] << "," << templates[i] 
-			<< "," << amplitudes[i] << "," << closest_y[i] << std::endl;
+	if (!spikesFileOut.is_open() || spikesFileOut.fail()) {
+		std::cerr << "WARNING: Spike output file is not writable, attempting to reopen..." << std::endl;
+		spikesFileOut.clear();
+		spikesFileOut.open(ossOutputDir + "spikeOutput.txt", std::ios::app); // append to avoid clobbering current run's data
+		if (!spikesFileOut.is_open()) {
+			std::cerr << "ERROR: Could not reopen spike output file!" << std::endl;
+			return;
+		}
 	}
+
+	for (int i = 0; i < times.size() && i < templates.size(); i++) {
+		spikesFileOut << recordingOffset + times[i] << "," << templates[i]
+			<< "," << amplitudes[i] << "," << closest_y[i] << "\n";
+	}
+	spikesFileOut.flush();
 }
 
 template <class T>
@@ -1131,19 +1394,22 @@ typename std::vector<T>::iterator insert_sorted(std::vector<T> &vec, T const& it
 void OnlineSpikesV2::saveSpikes(
 	long numSpikes,
 	long startSampleOffset, long endSampleOffset, 
-	std::vector<long>& times, std::vector<long>& templates, std::vector<float>& amplitudes
+	std::vector<long>& times, std::vector<long>& templates, std::vector<float>& amplitudes,
+	std::vector<float>& matchScores
 ) 
 {
 	static const char *ptLabel = { "OnlineSpikes::saveSpikes" }; _UNUSED(*ptLabel);
 	long  sampleInd;
 	long  templateInd;
 	float amplitude;
+	float matchScore;
 
 	//Loop over found spikes
 	for (long i = 0; i < numSpikes; i++) {
 		sampleInd = spikeTimes[i] - M / 2 - M + nt0min; // just copying kilosort here
 		sampleInd -= lookback;							// to account for our overlapping batches
 		amplitude = spikeAmplitudes[i];	
+		matchScore = (Th_learned > 0) ? sqrtf(spikeMatchScores[i]) / (float)Th_learned : 0.0f;
 		templateInd = closestCluster(closest_x[i], closest_y[i]);
 
 		// if template is spiking too soon, skip
@@ -1160,5 +1426,6 @@ void OnlineSpikesV2::saveSpikes(
 		size_t pos = itr - times.begin(); // Get position of where new time was inserted
 		templates.insert(templates.begin() + pos, templateInd);
 		amplitudes.insert(amplitudes.begin() + pos, amplitude);
+		matchScores.insert(matchScores.begin() + pos, matchScore);
 	}
 }

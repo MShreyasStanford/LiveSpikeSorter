@@ -6,9 +6,6 @@
 #include <cstring>
 #include <sstream>
 #include "Decoder.h"
-#include "ZScoreSdmProcessor.h"
-#include "LogRegSdmProcessor.h"
-#include "BinCountSdmProcessor.h"
 #include "../Networking/NetworkHelpers.h"
 #include "../Helpers/TimeHelpers.h"
 #include "SVMModel.h"
@@ -21,7 +18,6 @@ typedef unsigned long long t_ull; // TODO for all stream counts use this type
 Decoder::Decoder(std::vector<sockaddr_in> sorterImecAddrs, std::vector<sockaddr_in> sorterNidqAddrs, sockaddr_in guiAddr, InputParameters params, DataSocket** mNC)
 	: m_imecSock(Sock::UDP)
 	, m_nidqSock(Sock::UDP)
-	, m_sdmSock(params.sdmProcessorType == "bincounts" ? Sock::TCP : Sock::UDP)
 	, imecFm(&m_imecSock)
 	, nidqFm(&m_nidqSock)
 	, sorterNidqAddr(sorterNidqAddr)
@@ -83,49 +79,21 @@ Decoder::Decoder(std::vector<sockaddr_in> sorterImecAddrs, std::vector<sockaddr_
 	sendConnectMsg(&m_imecSock, sorterImecAddrs[params.uSelectedDevice], _DECODER_IMEC);
 	sendConnectMsg(&m_imecSock, sorterNidqAddrs[params.uSelectedDevice], _DECODER_NIDQ);
 
-	// Instantiate SDM processor by config
-	if (params.sdmProcessorType == "bincounts") {
-		m_sdmProcessor = std::make_unique<BinCountSdmProcessor>();
-	} else if (params.sdmProcessorType == "logreg") {
-		m_sdmProcessor = std::make_unique<LogRegSdmProcessor>();
-	} else {
-		m_sdmProcessor = std::make_unique<ZScoreSdmProcessor>();
-	}
+	// Instantiate the SDM processor 
+	m_sdmProcessor = createSdmProcessor(params.sdmProcessorType);
 	m_sdmProcessor->init(params, m_sdmActivitySubset);
 
-	// Connect to stimulus display machine
-	const std::string sdmProto = (params.sdmProcessorType == "bincounts") ? "TCP" : "UDP";
+	// Connect to SDM 
+	m_sdmSock = std::make_unique<Sock>(m_sdmProcessor->useTcp() ? Sock::TCP : Sock::UDP);
+	const std::string sdmProto = m_sdmProcessor->useTcp() ? "TCP" : "UDP";
 	const std::string sdmIp = params.sdmIP.empty() ? std::string("192.168.1.1") : params.sdmIP;
-	if (!m_sdmSock.connect(sdmIp, params.sdmPort))
-		std::cerr << "SDM " << sdmProto << " setup failed: " << m_sdmSock.errorReason() << std::endl;
+	if (!m_sdmSock->connect(sdmIp, params.sdmPort))
+		std::cerr << "SDM " << sdmProto << " setup failed: " << m_sdmSock->errorReason() << std::endl;
 	else {
 		std::cout << "SDM " << sdmProto << " destination set to " << sdmIp << ":" << params.sdmPort << std::endl;
-
-		// BinCounts hello is deferred to spikeReceiver() where we know the
-		// real template count from the sorter.  Send it now only for
-		// non-bincounts processors (where sendHello is a no-op anyway).
-		if (params.sdmProcessorType != "bincounts")
-			m_sdmProcessor->sendHello(m_sdmSock);
-
-		// For zscore/logreg, send the legacy 13-byte hello
-		if (params.sdmProcessorType != "bincounts") {
-			uint8_t sdmHello[13] = { 0 };
-			sdmHello[0] = static_cast<uint8_t>(0);
-			const float helloFloat = 0.0f;
-			const uint64_t helloU64 = 0;
-			std::memcpy(&sdmHello[1], &helloFloat, sizeof(float));
-			std::memcpy(&sdmHello[5], &helloU64, sizeof(uint64_t));
-			const uint sent = m_sdmSock.sendData(sdmHello, static_cast<uint>(sizeof(sdmHello)));
-			if (sent == 0) {
-				std::cerr << "SDM " << sdmProto << " hello send failed: " << m_sdmSock.errorReason() << std::endl;
-			}
-			else {
-				std::cout << "SDM " << sdmProto << " hello sent (" << sent << " bytes)." << std::endl;
-			}
-		}
+		m_sdmProcessor->sendConnectHello(*m_sdmSock);
 	}
 
-	// Start up eventReceiver and spikeReceiver (for exit protocol, could have spikeReceiver on a thread too
 	spikeReceiver();
 };
 
@@ -171,7 +139,7 @@ void Decoder::spikeReceiver() {
 
 	// Now we know the real template count — update the processor and send hello
 	m_sdmProcessor->setNumTemplates(sorterParams.m_lT);
-	m_sdmProcessor->sendHello(m_sdmSock);
+	m_sdmProcessor->sendHello(*m_sdmSock);
 
 	while (true) {
 		payload = recvPayload<OnlineSpikesPayload>(&imecFm); // from sorter
@@ -201,7 +169,7 @@ void Decoder::spikeReceiver() {
 		{
 			const long long batchGlxSigned = static_cast<long long>(streamSampleCt) + static_cast<long long>(recordingOffset);
 			const uint64_t batchGlxSampleCt = (batchGlxSigned > 0) ? static_cast<uint64_t>(batchGlxSigned) : 0ULL;
-			m_sdmProcessor->onBatchComplete(m_sdmSock, batchGlxSampleCt, streamSampleCt);
+			m_sdmProcessor->onBatchComplete(*m_sdmSock, batchGlxSampleCt, streamSampleCt);
 		}
 
 		// Process bin boundaries from spike times
@@ -212,7 +180,7 @@ void Decoder::spikeReceiver() {
 				const long long glxSampleCtSigned = static_cast<long long>(binEndSampleCt) + static_cast<long long>(recordingOffset);
 				const uint64_t glxSampleCt = (glxSampleCtSigned > 0) ? static_cast<uint64_t>(glxSampleCtSigned) : 0ULL;
 
-				m_sdmProcessor->sendPacket(m_sdmSock, glxSampleCt, binEndSampleCt);
+				m_sdmProcessor->sendPacket(*m_sdmSock, glxSampleCt, binEndSampleCt);
 				currentBinIndex++;
 			}
 		}
@@ -224,7 +192,7 @@ void Decoder::spikeReceiver() {
 			const long long glxSampleCtSigned = static_cast<long long>(binEndSampleCt) + static_cast<long long>(recordingOffset);
 			const uint64_t glxSampleCt = (glxSampleCtSigned > 0) ? static_cast<uint64_t>(glxSampleCtSigned) : 0ULL;
 
-			m_sdmProcessor->sendPacket(m_sdmSock, glxSampleCt, binEndSampleCt);
+			m_sdmProcessor->sendPacket(*m_sdmSock, glxSampleCt, binEndSampleCt);
 			currentBinIndex++;
 		}
 

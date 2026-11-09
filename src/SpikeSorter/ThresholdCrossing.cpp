@@ -81,7 +81,7 @@ ThresholdCrossing::ThresholdCrossing(InputParameters Params, sockaddr_in mainAdd
 	for (int i = 0; i < m_lC; i++) m_vChannelMap.push_back(i);
 	
 #ifdef _DEBUG
-	m_mNC = new MockStreamDataSocket(Params.sDataAccquisitionHost, Params.uDataAccquisitionPort, Params.iSubstream, Params.iMaxScanWindow, Params.iMinScanWindow, Params.fImecSamplingRate, Params.fNidqSamplingRate, m_lC, channelMap, Params.iDownsampling); // TODO move stuff here into StreamDataSocket constructor
+	m_mNC = new MockStreamDataSocket(Params.sDataAccquisitionHost, Params.uDataAccquisitionPort, Params.iSubstream, Params.iMaxScanWindow, Params.iMinScanWindow, Params.fImecSamplingRate, Params.fNidqSamplingRate, Params.iDownsampling); // TODO move stuff here into StreamDataSocket constructor
 #else
 	m_mNC = new StreamDataSocket(Params.sDataAccquisitionHost, Params.uDataAccquisitionPort, Params.iSubstream, Params.iMaxScanWindow, Params.iMinScanWindow, Params.fImecSamplingRate, Params.fNidqSamplingRate, Params.iDownsampling); // TODO move stuff here into StreamDataSocket constructor
 #endif

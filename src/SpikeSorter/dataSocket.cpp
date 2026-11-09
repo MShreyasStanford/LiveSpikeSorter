@@ -20,6 +20,9 @@
 
 static std::mutex sglxMutex;
 
+// Per-thread fetch buffer
+static thread_local std::vector<short> tl_fetchBuffer;
+
 // ------------------------------------------------------------------------------
 //
 // Name			: StreamDataSocket::StreamDataSocket()
@@ -89,6 +92,28 @@ t_ull StreamDataSocket::getStreamSampleCt(int streamType, OSSSpecificParams osPa
 	return sampleCt;
 }
 
+// Drift retrain
+bool StreamDataSocket::getSaveInfo(RetrainSaveInfo& info, OSSSpecificParams osParams) {
+	std::unique_lock<std::mutex> lock(sglxMutex);
+
+	bool ok = true;
+	ok &= sglx_isSaving(info.saving, S);
+	ok &= sglx_getDataDir(info.dataDir, S, 0);
+	ok &= sglx_getRunName(info.runName, S);
+	ok &= sglx_getParams(info.params, S);
+
+	info.fileStart   = sglx_getStreamFileStart(S, IMEC, osParams.substream);
+	info.sampleCount = sglx_getStreamSampleCount(S, IMEC, osParams.substream);
+
+	return ok;
+}
+
+// Close SpikeGLX recording file 
+bool StreamDataSocket::finalizeRecording() {
+	std::unique_lock<std::mutex> lock(sglxMutex);
+	return sglx_setRecordingEnable(S, false);
+}
+
 // sglx_fetch returns the sample count index of first sample in matrix, or zero if error. StreamDataSocket::fetch, however,
 // returns the sample count index of the last sample in matrix.
 t_ull StreamDataSocket::fetch(std::vector<short> &data, t_sglxconn &S, int streamType, int substream, t_ull startSamp, int maxSamps, const std::vector<int> &channelSubset) {
@@ -116,11 +141,9 @@ t_ull StreamDataSocket::fetchLatest(float *fData, OSSSpecificParams osParams, t_
 	}
 
 	lStartCt = lLatestCt - lToGet;
-	lLatestCt = fetch(m_sFetchBuffer, S, IMEC, osParams.substream, lStartCt, lToGet, osParams.vImecChannels);
-
-	//Fill fData with m_sFetchBuffer's contents
+	lLatestCt = fetch(tl_fetchBuffer, S, IMEC, osParams.substream, lStartCt, lToGet, osParams.vImecChannels);
 	for (long lI = 0; lI < lToGet * osParams.lNChans; lI++) {
-		fData[lI] = (float)m_sFetchBuffer[lI];
+		fData[lI] = (float)tl_fetchBuffer[lI];
 	}
 	return lLatestCt;
 }
@@ -141,11 +164,9 @@ t_ull StreamDataSocket::fetchLatest_TC(float *fData, OSSSpecificParams osParams,
 		lStartCt = lLatestCt - m_lMaxSize;
 	}
 
-	lLatestCt = fetch(m_sFetchBuffer, S, IMEC, osParams.substream, lStartCt, lToGet, osParams.vImecChannels);
-
-	//Fill fData with m_sFetchBuffer's contents
+	lLatestCt = fetch(tl_fetchBuffer, S, IMEC, osParams.substream, lStartCt, lToGet, osParams.vImecChannels);
 	for (long lI = 0; lI < lToGet * osParams.lNChans; lI++)
-		fData[lI] = (float)m_sFetchBuffer[lI];
+		fData[lI] = (float)tl_fetchBuffer[lI];
 
 	//std::cout << "number of samples: " << lToGet << std::endl;
 	//std::cout << "number of channels: " << m_lNChans << std::endl;
@@ -161,11 +182,9 @@ t_ull StreamDataSocket::fetchFromPlace(float *fData, OSSSpecificParams osParams,
 	// Limit the fetch amount to the max size
 	t_ull lToGet = min(m_lMaxSize, lLatestCt - lStartCt);
 
-	lLatestCt = fetch(m_sFetchBuffer, S, IMEC, osParams.substream, lStartCt, lToGet, osParams.vImecChannels);
-
-	//Fill data buffer with m_sFetchBuffer
+	lLatestCt = fetch(tl_fetchBuffer, S, IMEC, osParams.substream, lStartCt, lToGet, osParams.vImecChannels);
 	for (long lI = 0; lI < lToGet * osParams.lNChans; lI++)
-		fData[lI] = (float)m_sFetchBuffer[lI];
+		fData[lI] = (float)tl_fetchBuffer[lI];
 
 	return lLatestCt;
 }

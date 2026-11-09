@@ -1,6 +1,7 @@
 #ifndef BaseModel_H_
 #define BaseModel_H_
 
+#include <string>
 #include <vector>
 #include <map>
 

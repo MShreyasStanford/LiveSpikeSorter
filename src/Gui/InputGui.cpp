@@ -3,6 +3,7 @@
 #include <ImGUI/imgui.h>
 #include <ImGUI/imgui_stdlib.h>
 
+#include "../Decoder/SdmProcessor.h" 
 #include "../Networking/NetworkHelpers.h"
 #include "../Helpers/GuiHelpers.h"
 #include "InputGui.h"
@@ -58,14 +59,9 @@ InputGUI::InputGUI(InputParameters cmdLineParams)
 	Params.sdmIP = cmdLineParams.sdmIP;
 	Params.sdmPort = cmdLineParams.sdmPort;
 	Params.vSdmActivitySubset = cmdLineParams.vSdmActivitySubset;
-	Params.sdmTriggerZ = cmdLineParams.sdmTriggerZ;
-	Params.sdmBaselineMinSeconds = cmdLineParams.sdmBaselineMinSeconds;
 	Params.sdmTriggerBinMs = cmdLineParams.sdmTriggerBinMs;
 	Params.sdmProcessorType = cmdLineParams.sdmProcessorType;
-	Params.sSdmSpikesFile = cmdLineParams.sSdmSpikesFile;
-	Params.sSdmEventFile = cmdLineParams.sSdmEventFile;
-	Params.sSdmDecoderWorkFolder = cmdLineParams.sSdmDecoderWorkFolder;
-	Params.sdmDecoderWindowMs = cmdLineParams.sdmDecoderWindowMs;
+	Params.mapSdmParams = cmdLineParams.mapSdmParams;  
 
 	/* -------- device selection -------- */
 	Params.vSelectedDevices = cmdLineParams.vSelectedDevices;
@@ -77,6 +73,7 @@ InputGUI::InputGUI(InputParameters cmdLineParams)
 	Params.mapDecoderInputFolders = cmdLineParams.mapDecoderInputFolders;
 	Params.mapSpikeFiles = cmdLineParams.mapSpikeFiles;
 	Params.mapOSSOutputFolders = cmdLineParams.mapOSSOutputFolders;
+	Params.mapDeviceSubstreams = cmdLineParams.mapDeviceSubstreams;
 
 	/* Fill in missing keys (if any) */
 	auto ensure_key = [&](auto& m, const std::string& def_val)
@@ -91,10 +88,19 @@ InputGUI::InputGUI(InputParameters cmdLineParams)
 	ensure_key(Params.mapSpikeFiles, Params.sSpikesFile);
 	ensure_key(Params.mapOSSOutputFolders, Params.sOSSOutputFolder);
 
+	Params.bSkipInputGui = cmdLineParams.bSkipInputGui;
+	Params.sSpikeStreamAddr = cmdLineParams.sSpikeStreamAddr;
+
+	// Live drift estimation
+	Params.bDriftEstimation = cmdLineParams.bDriftEstimation;
+	Params.fDriftWindowSeconds = cmdLineParams.fDriftWindowSeconds;
+	Params.fDriftMaxShiftUm = cmdLineParams.fDriftMaxShiftUm;
+	Params.fDriftRetrainThresholdUm = cmdLineParams.fDriftRetrainThresholdUm;
+
 	// TODO: remove the marked entries from InputParameters and remove any dependencies on them
 	/* -------- fixed defaults -------- */
-	Params.sDataAccquisitionHost = _LOCAL_HOST;
-	Params.uDataAccquisitionPort = 4142;
+	Params.sDataAccquisitionHost = cmdLineParams.sDataAccquisitionHost.empty() ? _LOCAL_HOST : cmdLineParams.sDataAccquisitionHost;
+	Params.uDataAccquisitionPort = cmdLineParams.uDataAccquisitionPort != 0 ? cmdLineParams.uDataAccquisitionPort : 4142;
 	Params.fImecSamplingRate = 30000.f;
 	Params.fNidqSamplingRate = 25000.f;
 	Params.fThresholdStd = 3.f;
@@ -108,13 +114,13 @@ InputGUI::InputGUI(InputParameters cmdLineParams)
 	Params.iConvolutionTimes = 2; // remove, no longer needed
 	Params.iDownsampling = 1; // remove, no longer needed
 	Params.iMaxIts = 150; // remove, no longer needed
-	Params.iTimeBehind = 0;
+	Params.iTimeBehind = cmdLineParams.iTimeBehind;
 	Params.iAvgWindowTime = 5000;
 	Params.iRedundancy = 7;
 	Params.iSorterType = 0;
 	Params.iNumTemplates = 300;
 
-	Params.bSmallskip = false;
+	Params.bSmallskip = cmdLineParams.bSmallskip;
 	Params.bReadFromFile = false;
 	Params.bIsDecoding = false;
 	Params.bIsSendingFeedback = false;
@@ -210,10 +216,6 @@ void InputGUI::gatherNetworkParameters() {
 }
 
 void InputGUI::gatherDataAccquisitionParameters() {
-	ImGui::Text("Input Folder:"); ImGui::SameLine();
-	HelpMarker("Folder containing the templates.npy, whitening_mat.npy, and channel_map.npy files.");
-	InputTextWithFileDialog("##Folder", &Params.sInputFolder, "Select##folderButton", Params.sInputFolder.c_str(), NULL, NULL, NULL, true);
-
 	ImGui::Text("Imec Sampling Rate (Hz):");
 	ImGui::InputFloat("##ImecSampRate", &Params.fImecSamplingRate, 100, 1000, "%.6f");
 
@@ -249,9 +251,21 @@ void InputGUI::gatherDataAccquisitionParameters() {
 		ImGui::InputInt("##Port", &temp2, 1, 100, 0);
 		Params.uDataAccquisitionPort = temp2;
 
-		ImGui::Text("Substream:"); ImGui::SameLine();
-		HelpMarker("What imec-probe are you using? E.g. if using imec4, set substream as 4");
-		ImGui::InputInt("##Substream", &Params.iSubstream);
+		// Mapping sorter to probe with multipule GPU
+		if (Params.vSelectedDevices.size() <= 1) {
+			ImGui::Text("Substream:"); ImGui::SameLine();
+			HelpMarker("What imec-probe are you using? E.g. if using imec4, set substream as 4");
+			if (!Params.vSelectedDevices.empty()) {
+				auto it = Params.mapDeviceSubstreams.find(Params.vSelectedDevices[0]);
+				if (it != Params.mapDeviceSubstreams.end())
+					Params.iSubstream = it->second;
+				ImGui::InputInt("##Substream", &Params.iSubstream);
+				Params.mapDeviceSubstreams[Params.vSelectedDevices[0]] = Params.iSubstream;
+			}
+			else {
+				ImGui::InputInt("##Substream", &Params.iSubstream);
+			}
+		}
 	}
 }
 
@@ -381,6 +395,15 @@ void InputGUI::gatherParallelizedOSSInputs() {
 				}
 			}
 			HelpMarker("Folder containing the templates.npy, whitening_mat.npy, and channel_map.npy files.");
+
+			std::string probeLabel = "Probe (imecN) for Device " + std::to_string(Params.vSelectedDevices[i]) + ": ";
+			ImGui::Text(probeLabel.c_str()); ImGui::SameLine();
+			auto it = Params.mapDeviceSubstreams.find(Params.vSelectedDevices[i]);
+			int probe = (it != Params.mapDeviceSubstreams.end()) ? it->second : Params.iSubstream;
+			ImGui::PushItemWidth(100);
+			ImGui::InputInt(("##Probe" + std::to_string(i)).c_str(), &probe);
+			ImGui::PopItemWidth();
+			Params.mapDeviceSubstreams[Params.vSelectedDevices[i]] = probe;
 		}
 	}
 }
@@ -391,12 +414,7 @@ void InputGUI::gatherDecoderParameters() {
 	*/
 	ImGui::Checkbox("Use real-time decoding.", &Params.bIsDecoding);
 	ImGui::SameLine(); HelpMarker("To use the decoder, first run the spikesorter for 10-20 minutes with this unchecked to produce a file called spike_output.txt. Then, run the spikesorter again with this box checked. The decoder will use spike_output as training data to train a real time classifier.");
-	if (!Params.bIsDecoding) {
-		ImGui::Text("Spike Sorter output data file:");
-		ImGui::SameLine(); HelpMarker("Once written, use this file as the decoder training data file.");
-		ImGui::InputText("##SpikeFile", &Params.sSpikesFile);
-	}
-	else {
+	if (Params.bIsDecoding) {
 		ImGui::Text("Directory:");
 		ImGui::SameLine(); HelpMarker("Set the base directory. This will auto-populate the training data file, output folder, and event file paths.");
 		InputTextWithFileDialog("##Directory", &Params.sDecoderInputFolder, "Select##DirectoryButton", Params.sDecoderWorkFolder.c_str(), NULL, NULL, NULL, true);
@@ -435,32 +453,22 @@ void InputGUI::gatherDecoderParameters() {
 
 	if (ImGui::CollapsingHeader("SDM Processor")) {
 		ImGui::Text("SDM Processor Type:");
-		ImGui::SameLine(); HelpMarker("Select the SDM processing strategy: 'zscore' for z-score baseline, 'logreg' for logistic regression, 'bincounts' for raw per-channel spike counts over TCP.");
-		bool isZscore = (Params.sdmProcessorType == "zscore");
-		bool isLogreg = (Params.sdmProcessorType == "logreg");
-		bool isBincounts = (Params.sdmProcessorType == "bincounts");
-		if (ImGui::RadioButton("Z-Score", isZscore)) Params.sdmProcessorType = "zscore";
-		ImGui::SameLine();
-		if (ImGui::RadioButton("Logistic Regression", isLogreg)) Params.sdmProcessorType = "logreg";
-		ImGui::SameLine();
-		if (ImGui::RadioButton("Bin Counts", isBincounts)) Params.sdmProcessorType = "bincounts";
+		ImGui::SameLine(); HelpMarker("How spikes become packets for the stimulus display machine. Settings for each processor are normally set in the Python launcher (src/Python/sdm_processors.py).");
+		const std::vector<std::string> names = registeredSdmProcessors();
+		for (size_t i = 0; i < names.size(); ++i) {
+			if (i > 0) ImGui::SameLine();
+			if (ImGui::RadioButton(names[i].c_str(), Params.sdmProcessorType == names[i]))
+				Params.sdmProcessorType = names[i];
+		}
 
-		if (Params.sdmProcessorType == "logreg") {
-			ImGui::Text("SDM Training Spikes File:");
-			ImGui::SameLine(); HelpMarker("Spike output file from a prior recording session (CSV: time,channel,amplitude).");
-			InputTextWithFileDialog("##SdmSpikesFile", &Params.sSdmSpikesFile, "Select##sdmSpikesButton", Params.sDecoderWorkFolder.c_str(), 1, txtFilterPattern, 0);
-
-			ImGui::Text("SDM Training Event File:");
-			ImGui::SameLine(); HelpMarker("Event file with labels (space-separated: time label, label = 0 or 1).");
-			InputTextWithFileDialog("##SdmEventFile", &Params.sSdmEventFile, "Select##sdmEventButton", Params.sDecoderWorkFolder.c_str(), 1, txtFilterPattern, 0);
-
-			ImGui::Text("SDM Decoder Work Folder:");
-			ImGui::SameLine(); HelpMarker("Folder for intermediate SDM decoder files.");
-			InputTextWithFileDialog("##SdmWorkFolder", &Params.sSdmDecoderWorkFolder, "Select##sdmWorkButton", Params.sDecoderWorkFolder.c_str(), NULL, NULL, NULL, true);
-
-			ImGui::Text("SDM Decoder Window (ms):");
-			ImGui::SameLine(); HelpMarker("Window length in milliseconds for the logistic regression feature vector.");
-			ImGui::InputInt("##SdmDecoderWindowMs", &Params.sdmDecoderWindowMs);
+		ImGui::Text("Processor settings (key = value):");
+		ImGui::SameLine(); HelpMarker("Passed to the processor as --sdm_param key=value. Empty until the launcher or command line sets them.");
+		for (auto& kv : Params.mapSdmParams) {
+			ImGui::Text("%s", kv.first.c_str());
+			ImGui::SameLine(220);
+			ImGui::PushItemWidth(540);
+			ImGui::InputText(("##sdm_param_" + kv.first).c_str(), &kv.second);
+			ImGui::PopItemWidth();
 		}
 	}
 }

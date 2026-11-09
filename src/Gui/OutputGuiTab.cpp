@@ -1,19 +1,34 @@
 #include <numeric>
+#include <cstdio>
+#include <algorithm>
+#include <fstream>
+#include <string>
+#include <cmath>
 
 #include <ImGUI/implot.h>
 #include <ImGUI/implot_internal.h>
-
+extern ImGuiID g_spikeStatsDockNode;
+extern ImGuiID g_rasterDockNode;
+#include "CNPY/cnpy.h"          // ks_dshift.npy, for the drift-trace overlay
 #include "../Helpers/GuiHelpers.h"
 #include "../Networking/sorterParameters.h"
 #include "../Networking/onlineSpikesPayload.h"
 #include "../Networking/NetworkHelpers.h"
+#include "../Helpers/RetrainSignal.h"   // g_retrainRequested (drift retrain feature)
 
 #include "OutputGuiTab.h"
 
 #define BIN_SIZE 1500
 static std::atomic<long long> maxSpikeTimesSize = 0;
 
-OutputGuiTab::OutputGuiTab(std::string tabName) :
+static std::string formatFixed2(double val) {
+	char buf[32];
+	std::snprintf(buf, sizeof(buf), "%.2f", val);
+	return std::string(buf);
+}
+
+OutputGuiTab::OutputGuiTab(std::string tabName, std::string ossInputDir, float retrainThresholdUm) :
+	m_fRetrainThresholdUm(retrainThresholdUm),
 	m_lT(0),
 	m_lC(0),
 	m_lM(0),
@@ -27,9 +42,11 @@ OutputGuiTab::OutputGuiTab(std::string tabName) :
 	m_bNeurons(),
 	plotWindowClass(ImGuiWindowClass()),
 	fm(&sock),
-	tabName(tabName)
+	tabName(tabName),
+	m_sOssInputDir(ossInputDir)
 {
 	plotWindowClass.DockNodeFlagsOverrideSet = ImGuiDockNodeFlags_NoDockingOverMe;
+	loadMatchBaseline();
 	std::thread fmThread = fm.assemblerThread();
 	fmThread.detach();
 };
@@ -78,6 +95,13 @@ void OutputGuiTab::setupOutput(sockaddr_in mainAddr, long m_lMaxScanWind, long m
 	m_fSampRate = params.m_fSampRate;
 	m_dChanpos = params.m_dChanpos;
 	m_vNeuronIndices = params.m_vNeuronIndices;
+
+	if (!m_vfMatchBaseline.empty() && (long)m_vfMatchBaseline.size() != m_lT) {
+		std::cout << "[MatchBaseline] WARNING: " << m_vfMatchBaseline.size()
+		          << " baselines but " << m_lT << " clusters -- match percentages "
+		             "may be paired with the wrong units. Re-run Kilosort4."
+		          << std::endl;
+	}
 
 	int min = INT_MAX;
 	for (auto &index : m_vNeuronIndices) if (index < min) min = index;
@@ -154,6 +178,17 @@ void OutputGuiTab::UpdateEvents() {
 			m_vfP2P.push_back(payload.P2P);
 		}
 
+		// Drift trace: one point per estimation window.
+		{
+			std::lock_guard<std::mutex> lk(driftMutex);
+			if (payload.driftUpdateCt > 0 &&
+			    payload.driftUpdateCt != m_lastDriftUpdateCt) {
+				m_lastDriftUpdateCt = payload.driftUpdateCt;
+				m_vfDriftDepth.push_back(payload.driftShiftUm);
+				m_vfDriftTimeSec.push_back((float)(payload.driftUpdateCt / (double)m_fSampRate));
+			}
+		}
+
 		processingTimeMutex.lock();
 		m_vProcessTimes.push_back(payload.processTime);
 		processingTimeMutex.unlock();
@@ -180,8 +215,13 @@ void OutputGuiTab::UpdateEvents() {
 			if (neur < m_lT) {
 				m_bNeurons[neur]->AddSpike(payload.Times[i]);
 				m_bNeurons[neur]->AddSpikeAmplitude(payload.Amplitudes[i]);
+				if (i < (int)payload.MatchScores.size())
+					m_bNeurons[neur]->AddMatchScore(payload.MatchScores[i],
+					                                payload.Times[i], m_fSampRate);
 			}
 		}
+
+		updatePopulationMatch();
 
 		for (int n = 0; n < m_lT; ++n) {
 			m_bNeurons[n]->CalcSpikeRate(&streamSampleCt,
@@ -211,17 +251,22 @@ void OutputGuiTab::DrawImGUI(const ImVec2 windowCenter) {
 	// Gui state
 	static bool showRaster = true;
 	static bool showNeuronInfo = true;
-	static bool showProcessTimes = false;
+	static bool showDrift = true;
+	static bool showProcessTimes = true;
 	static bool showVRMS = false;
 	static bool showP2P = false;
 	static bool showTrialInfo = true;
+	static bool showMatchScores = false;
+
 
 	ImGui::Begin("Plot Menu");
 	ImGui::Checkbox("Spike Raster", &showRaster);
 	ImGui::Checkbox("Neuron Info", &showNeuronInfo);
 	ImGui::Checkbox("Processing Times", &showProcessTimes);
-	//ImGui::Checkbox("VRMS", &showVRMS);	
+	//ImGui::Checkbox("VRMS", &showVRMS);
 	ImGui::Checkbox("P2P", &showP2P);
+	ImGui::Checkbox("Drift Trace", &showDrift);
+	ImGui::Checkbox("Match Quality", &showMatchScores);
 	//ImGui::Checkbox("Trial Info", &showTrialInfo);
 	ImGui::End();
 
@@ -243,25 +288,87 @@ void OutputGuiTab::DrawImGUI(const ImVec2 windowCenter) {
 	if (showP2P)
 		plotP2P(windowCenter, showP2P);
 
+	if (showDrift)
+		plotDriftTrace(windowCenter, showDrift);
+
+	if (showMatchScores)
+		plotMatchScores(windowCenter, showMatchScores);
+
 	//if (showTrialInfo)
 	//	displayTrialInfo(windowCenter, showTrialInfo);
 }
 
+static void RasterTimeAxisFormatter(double value, char* buff, int size, void* /*user_data*/) {
+	if (value < 0.0) value = 0.0;
+	long totalSec = (long)(value + 0.5);
+	long h = totalSec / 3600;
+	long m = (totalSec % 3600) / 60;
+	long s = totalSec % 60;
+	if (h > 0)
+		snprintf(buff, size, "%ld:%02ld:%02ld", h, m, s);
+	else
+		snprintf(buff, size, "%ld:%02ld", m, s);
+}
+
+
+// Same h:mm:ss as the raster
+static void DriftTimeAxisFormatter(double value, char* buff, int size, void* /*user_data*/) {
+	const char* sign = (value < 0.0) ? "-" : "";
+	long totalSec = (long)(fabs(value) + 0.5);
+	long h = totalSec / 3600;
+	long m = (totalSec % 3600) / 60;
+	long s = totalSec % 60;
+	if (h > 0)
+		snprintf(buff, size, "%s%ld:%02ld:%02ld", sign, h, m, s);
+	else
+		snprintf(buff, size, "%s%ld:%02ld", sign, m, s);
+}
+
 
 void OutputGuiTab::plotRaster(const ImVec2 windowCenter, bool &showRaster) {
-	ImGui::SetNextWindowPos(windowCenter, ImGuiCond_Once, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(ImVec2(800, 360), ImGuiCond_Once);
+	if (g_rasterDockNode != 0)
+		ImGui::SetNextWindowDockID(g_rasterDockNode, ImGuiCond_Always);
 
 	ImGui::SetNextWindowClass(&plotWindowClass);
-	ImGui::Begin("Raster Plot", &showRaster);
-	static int	  history = 5; // Seconds
 
+	// Check Begin() return value: returns false when the window is collapsed.
+	// All ImPlot calls must be skipped in that case — calling EndPlot() without
+	// a successful BeginPlot() corrupts ImPlot's context and triggers a GPU TDR crash.
+	if (!ImGui::Begin("Raster Plot", &showRaster)) {
+		ImGui::End();
+		return;
+	}
+
+	static int	  history = 5; // Seconds
 	ImGui::InputInt("History (s):", &history, 1, 10);
 	history = max(1, history); // TODO clampedInput
 
-	static std::vector<long> yVal;
-	//std::atomic<long long> max_vSpikesSize = 0;
 
+	
+	ImGui::SameLine();
+	ImGui::Checkbox("Fit to active neurons", &m_bFittoActive);
+
+	double yLo = m_iMinNeuronIndex - 0.5;
+	double yHi = m_lT - 0.5;
+	if (m_bFittoActive) {
+		int lo = INT_MAX, hi = INT_MIN;
+		for (int i = 0; i < m_lT; i++) {
+			std::lock_guard<std::mutex> lock(m_bNeurons[i]->spikeTimeMutex);
+			if (m_bNeurons[i]->m_vSpikeTime.empty())
+			continue;
+			if (i < lo) lo = i;
+			if (i > hi) hi = i;
+		}
+		if (lo <= hi) { // check if at least one neuron has fired
+			yLo = lo - 0.5;
+			yHi = hi + 0.5;
+		}
+	}
+
+
+
+	static std::vector<double> yVal;
+	static std::vector<double> xSec;
 	int size;
 
 	// Compute the history window size (in streamSampleCounts)
@@ -270,87 +377,106 @@ void OutputGuiTab::plotRaster(const ImVec2 windowCenter, bool &showRaster) {
 	// startingStreamSampleCt is the left most stream sample count that will be plotted in the raster
 	long startingStreamSampleCt = streamSampleCt - window;
 
-	//std::cout << "window = " << window << "\n"
-	//	<< "streamSampleCt = " << streamSampleCt << "\n";
 	if (streamSampleCt < window) { // Start of run edge case (No scrolling because looking at a time window < window)
-		// Set Axis limits
 		ImPlot::SetNextAxisToFit(ImAxis_X1);
-		ImPlot::SetNextAxisLimits(ImAxis_Y1, m_iMinNeuronIndex - 0.5, m_lT - 0.5, ImPlotCond_Always); 
+		ImPlot::SetNextAxisLimits(ImAxis_Y1, yLo, yHi, ImPlotCond_Always);
 
-		ImPlot::BeginPlot("Raster plot:", ImVec2(-1, -1), ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoTitle);
-		ImPlot::SetupAxes("Time (stream sample counts)", "Neuron");
+		if (ImPlot::BeginPlot("Raster plot:", ImVec2(-1, -1), ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoTitle)) {
+			ImPlot::SetupAxes("Time (hh:mm:ss)", "Neuron");
+			ImPlot::SetupAxisFormat(ImAxis_X1, RasterTimeAxisFormatter);
+			
+			const double secPerSample = 1.0 / (double)m_fSampRate;
+			for (int i = 0; i < m_lT; i++) {
+				std::lock_guard<std::mutex> lock(m_bNeurons[i]->spikeTimeMutex);
+				if (m_bNeurons[i]->m_vSpikeTime.empty())
+					continue;
 
-		for (int i = 0; i < m_lT; i++) {
-			std::lock_guard<std::mutex> lock(m_bNeurons[i]->spikeTimeMutex);
-			// If neuron has no spikes continue to next neuron
-			if (m_bNeurons[i]->m_vSpikeTime.empty())
-				continue;
-
-			// Create a y vector for PlotScatter()
-			size = m_bNeurons[i]->m_vSpikeTime.size();
-			yVal = std::vector<long>(size, m_bNeurons[i]->m_inumber);
-			ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 0.8F, ImVec4(0.26f, 0.59f, 0.98f, 0.78f), IMPLOT_AUTO, ImVec4(0.26f, 0.59f, 0.98f, 0.78f));
-			ImPlot::PlotScatter(("N" + std::to_string(i)).c_str(), m_bNeurons[i]->m_vSpikeTime.data(), yVal.data(), size);
-		}
-
-		ImPlot::EndPlot();
-		ImGui::End();
-	} 
-	else { // Non-edge case behavior (Scrolling raster of size window)
-		ImPlot::SetNextAxisLimits(ImAxis_X1, startingStreamSampleCt, startingStreamSampleCt + window, ImPlotCond_Always);
-		ImPlot::SetNextAxisLimits(ImAxis_Y1, m_iMinNeuronIndex - 0.5, m_lT - 0.5, ImPlotCond_Always);  // TODO, allow to look at more specific neurons
-
-		ImPlot::BeginPlot("Raster plot:", ImVec2(-1, -1), ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoTitle);
-		ImPlot::SetupAxes("Time (stream sample counts)", "Neuron");
-
-		for (int i = 0; i < m_lT; i++) {
-			std::lock_guard<std::mutex> lock(m_bNeurons[i]->spikeTimeMutex);
-
-			// If neuron has no spikes continue to next neuron
-			if (m_bNeurons[i]->m_vSpikeTime.empty())
-				continue;
-
-
-			// Find index of first element in m_vSpikeTimes that occurs after startingStreamSampleCt
-			int startingIndex = -1;
-			if (m_bNeurons[i]->m_vSpikeTime[0] > startingStreamSampleCt) { // If first spike in bounds, all in bounds
-				startingIndex = 0;
+				size = m_bNeurons[i]->m_vSpikeTime.size();
+				xSec.resize(size);
+				for (int k = 0; k < size; k++) {
+					xSec[k] = m_bNeurons[i]->m_vSpikeTime[k] * secPerSample;
+				}
+				yVal.assign(size, (double)m_bNeurons[i]->m_inumber);
+				ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 0.8F, ImVec4(0.26f, 0.59f, 0.98f, 0.78f), IMPLOT_AUTO, ImVec4(0.26f, 0.59f, 0.98f, 0.78f));
+				ImPlot::PlotScatter(("N" + std::to_string(i)).c_str(), xSec.data(), yVal.data(), size);
 			}
-			else {
-				for (int j = m_bNeurons[i]->m_vSpikeTime.size() - 1; j >= 0; j--) { // Iterate backwards for efficiency (avoid counting over all spikes)
-					if (m_bNeurons[i]->m_vSpikeTime[j] < startingStreamSampleCt) {
-						startingIndex = j + 1;
-						break;
+
+			ImPlot::EndPlot();
+		}
+	}
+	else { // Non-edge case behavior (Scrolling raster of size window)
+
+		const double secPerSample = 1.0 / (double)m_fSampRate;
+		ImPlot::SetNextAxisLimits(ImAxis_X1, startingStreamSampleCt * secPerSample, (startingStreamSampleCt + window) * secPerSample, ImPlotCond_Always);
+		ImPlot::SetNextAxisLimits(ImAxis_Y1, yLo, yHi, ImPlotCond_Always);  // TODO, allow to look at more specific neurons
+
+		if (ImPlot::BeginPlot("Raster plot:", ImVec2(-1, -1), ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoTitle)) {
+			ImPlot::SetupAxes("Time (hh:mm:ss)", "Neuron");
+			ImPlot::SetupAxisFormat(ImAxis_X1, RasterTimeAxisFormatter);
+
+			const double startSec = startingStreamSampleCt * secPerSample;
+			const double endSec = (startingStreamSampleCt + window) * secPerSample;
+			static const double kStepLadder[] = { 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600 };
+			double rawStep = (endSec - startSec) / 6.0; // aim for ~6 ticks
+			double step = kStepLadder[0];
+			for (double cand : kStepLadder) { step = cand; if (cand >= rawStep) break; }
+			std::vector<double> tickSec;
+			for (double t = std::ceil(startSec / step) * step; t <= endSec; t += step)
+				tickSec.push_back(t);
+			if (!tickSec.empty())
+				ImPlot::SetupAxisTicks(ImAxis_X1, tickSec.data(), (int)tickSec.size());
+
+			for (int i = 0; i < m_lT; i++) {
+				std::lock_guard<std::mutex> lock(m_bNeurons[i]->spikeTimeMutex);
+				if (m_bNeurons[i]->m_vSpikeTime.empty())
+					continue;
+
+				// Find index of first element in m_vSpikeTimes that occurs after startingStreamSampleCt
+				int startingIndex = -1;
+				if (m_bNeurons[i]->m_vSpikeTime[0] > startingStreamSampleCt) { // If first spike in bounds, all in bounds
+					startingIndex = 0;
+				}
+				else {
+					for (int j = m_bNeurons[i]->m_vSpikeTime.size() - 1; j >= 0; j--) { // Iterate backwards for efficiency
+						if (m_bNeurons[i]->m_vSpikeTime[j] < startingStreamSampleCt) {
+							startingIndex = j + 1;
+							break;
+						}
 					}
 				}
+
+				if (startingIndex == -1)
+					continue;
+				
+					
+				size = m_bNeurons[i]->m_vSpikeTime.size() - startingIndex;
+				xSec.resize(size);
+				for (int k = 0; k < size; k++)
+				{
+					xSec[k] = m_bNeurons[i]->m_vSpikeTime[startingIndex + k] * secPerSample;
+				}
+				yVal.assign(size, (double)i);
+
+				ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 0.8F, ImVec4(0.26f, 0.59f, 0.98f, 0.78f), IMPLOT_AUTO, ImVec4(0.26f, 0.59f, 0.98f, 0.78f));
+				ImPlot::PlotScatter(("N" + std::to_string(i)).c_str(), xSec.data(), yVal.data(), size);
 			}
 
-			// Continue if no spikes to plot
-			if (startingIndex == -1)
-				continue;
-
-
-			std::vector<long> windowSpikesTimes(m_bNeurons[i]->m_vSpikeTime.begin() + startingIndex, m_bNeurons[i]->m_vSpikeTime.end()); // TODO lots of error messages from here
-			//m_bNeurons[i]->m_vSpikeTime = std::move(windowSpikesTimes);
-			//if (m_bNeurons[i]->m_vSpikeTime.size() > max_vSpikesSize) max_vSpikesSize = m_bNeurons[i]->m_vSpikeTime.size();
-
-			// Subtract the startingStreamSampleCt from the spike times to stop the plot from "moving right"
-			//for (long& val : windowSpikesTimes)
-			//	val -= startingStreamSampleCt;
-
-			// Create a y vector for PlotScatter()
-			size = windowSpikesTimes.size();
-			yVal = std::vector<long>(size, i);
-
-			ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 0.8F, ImVec4(0.26f, 0.59f, 0.98f, 0.78f), IMPLOT_AUTO, ImVec4(0.26f, 0.59f, 0.98f, 0.78f));
-			ImPlot::PlotScatter(("N" + std::to_string(i)).c_str(), windowSpikesTimes.data(), yVal.data(), size);
+			ImPlot::EndPlot();
 		}
-
-		//std::cout << "max = " << max_vSpikesSize << std::endl;
-		ImPlot::EndPlot();
-		ImGui::End();
 	}
+
+	ImGui::End();
 }
+
+float OutputGuiTab::matchPctForNeuron(int idx) const {
+	if (idx < 0 || idx >= (int)m_vfMatchBaseline.size()) return -1.0f;
+	const float base = m_vfMatchBaseline[idx];
+	if (base <= 0.0f) return -1.0f;
+	const float cur = m_bNeurons[idx]->CurrentMatchScore(streamSampleCt, m_fSampRate);
+	if (cur <= 0.0f) return -1.0f;   // no score yet, or silent for a full window
+	return 100.0f * cur / base;
+}
+
 
 void OutputGuiTab::displayNeuronInfo(const ImVec2 windowCenter, bool &showNeuronInfo) {
 	ImGui::SetNextWindowPos(windowCenter, ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
@@ -360,13 +486,25 @@ void OutputGuiTab::displayNeuronInfo(const ImVec2 windowCenter, bool &showNeuron
 
 	std::string txt;
 	for (int ij = 0; ij < m_lT; ij++) {
+		if (m_bFittoActive && m_bNeurons[ij]->GetTotSpikeCount() == 0)
+			continue;
 		txt = "N" + std::to_string(ij);
 		if (ImGui::Button(txt.c_str())) {
 			m_bNeurons[ij]->SelectNeuron();
 		}
 		ImGui::SameLine();
-		txt = " FR: " + std::_Floating_to_string("%.2f", m_bNeurons[ij]->GetSpikeRate()) + "Hz, nSpikes: " + std::to_string(m_bNeurons[ij]->GetTotSpikeCount());
+		txt = " FR: " + formatFixed2(m_bNeurons[ij]->GetSpikeRate()) + "Hz, nSpikes: " + std::to_string(m_bNeurons[ij]->GetTotSpikeCount());
 		ImGui::Text(txt.c_str());
+
+		const float pct = matchPctForNeuron(ij);
+		if (pct >= 0.0f) {
+			ImGui::SameLine();
+			ImVec4 col;
+			if      (pct < 70.0f) col = ImVec4(0.95f, 0.35f, 0.30f, 1.0f);  // red
+			else if (pct < 85.0f) col = ImVec4(1.00f, 0.75f, 0.20f, 1.0f);  // amber
+			else                  col = ImVec4(0.45f, 0.45f, 0.45f, 1.0f);  // grey
+			ImGui::TextColored(col, ", match %.0f%%", pct);
+		}
 	}
 	ImGui::End();
 }
@@ -383,19 +521,19 @@ void OutputGuiTab::plotVRMS(const ImVec2 windowCenter, bool &showVRMS) {
 	ImGui::SetNextWindowPos(windowCenter, ImGuiCond_Once, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(ImVec2(500, 360), ImGuiCond_Once);
 	ImGui::SetNextWindowClass(&plotWindowClass);
-	ImGui::Begin("VRMS over time", &showVRMS);
+	if (!ImGui::Begin("VRMS over time", &showVRMS)) { ImGui::End(); return; }
 
 	static int history = 1000;
 	ImGui::InputInt("History (s):", &history, 50, 500);
 
 	double *PlotArray = m_vdVRMS.data();
 	int ToShow = (history > m_vdVRMS.size()) ? m_vdVRMS.size() : history;
-
 	PlotArray += m_vdVRMS.size() - ToShow;
 
-	ImPlot::BeginPlot("VRMS vs. Time", ImVec2(-1, -1));
-	ImPlot::PlotLine("VRMS", PlotArray, ToShow);
-	ImPlot::EndPlot();
+	if (ImPlot::BeginPlot("VRMS vs. Time", ImVec2(-1, -1))) {
+		ImPlot::PlotLine("VRMS", PlotArray, ToShow);
+		ImPlot::EndPlot();
+	}
 	ImGui::End();
 }
 
@@ -403,27 +541,187 @@ void OutputGuiTab::plotP2P(const ImVec2 windowCenter, bool &showP2P) {
 	ImGui::SetNextWindowPos(windowCenter, ImGuiCond_Once, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(ImVec2(500, 360), ImGuiCond_Once);
 	ImGui::SetNextWindowClass(&plotWindowClass);
-	ImGui::Begin("P2P over time", &showP2P);
+	if (!ImGui::Begin("P2P over time", &showP2P)) { ImGui::End(); return; }
 
 	static int history = 1000;
 	ImGui::InputInt("History (s):", &history, 2, 60);
 
 	float *PlotArray = m_vfP2P.data();
 	int ToShow = (history > m_vfP2P.size()) ? m_vfP2P.size() : history;
-
 	PlotArray += m_vfP2P.size() - ToShow;
 
-	ImPlot::BeginPlot("P2P vs. Time", ImVec2(-1, -1));
-	ImPlot::PlotLine("P2P", PlotArray, ToShow);
-	ImPlot::EndPlot();
+	if (ImPlot::BeginPlot("P2P vs. Time", ImVec2(-1, -1))) {
+		ImPlot::PlotLine("P2P", PlotArray, ToShow);
+		ImPlot::EndPlot();
+	}
 	ImGui::End();
 }
 
-void OutputGuiTab::plotProcessTimes(const ImVec2 windowCenter, bool &showProcessTimes) {
-	ImGui::SetNextWindowPos(windowCenter, ImGuiCond_Once, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_Once);
+void OutputGuiTab::plotDriftTrace(const ImVec2 windowCenter, bool &showDrift) {
+	ImGui::SetNextWindowPos(windowCenter, ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(500, 360), ImGuiCond_FirstUseEver);
 	ImGui::SetNextWindowClass(&plotWindowClass);
-	ImGui::Begin("Processing time distribution", &showProcessTimes);
+	if (!ImGui::Begin("Drift trace", &showDrift)) { ImGui::End(); return; }
+
+	// Snapshot the trace under lock so the receive thread can keep appending.
+	std::vector<float> xs, ys;
+	{
+		std::lock_guard<std::mutex> lk(driftMutex);
+		xs = m_vfDriftTimeSec;
+		ys = m_vfDriftDepth;
+	}
+
+	if (xs.empty()) {
+		ImGui::Text("Waiting for the first drift estimate");
+		ImGui::End();
+		return;
+	}
+
+	float lo = ys[0], hi = ys[0];
+	for (size_t i = 1; i < ys.size(); ++i) {
+		if (ys[i] < lo) lo = ys[i];
+		if (ys[i] > hi) hi = ys[i];
+	}
+
+	if (!m_bDriftRefLoaded) loadDriftReference();
+
+	// --- Drift retrain controls -------------------------------------------
+	// TODO:
+	// - Consider moving this to a serpeate window
+	// - Allow user to subset last M minutes of recorded data for retraining
+	// 		- How do we resolve training data now being a subset of test? Files on disk are still the same
+	const float latestDrift = ys.back();
+	if (m_fRetrainThresholdUm > 0.0f && std::fabs(latestDrift) >= m_fRetrainThresholdUm) {
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
+		ImGui::TextWrapped("Drift %.1f um exceeds %.1f um. Consider retraining templates.",
+		                   latestDrift, m_fRetrainThresholdUm);
+		ImGui::PopStyleColor();
+	}
+
+	// "Retrain templates" button
+	if (!g_retrainRequested.load()) {
+		if (ImGui::Button("Retrain templates"))
+			ImGui::OpenPopup("Retrain templates?");
+	}
+	else {
+		ImGui::TextUnformatted("Retraining requested -- sorting will stop shortly.");
+	}
+
+	if (ImGui::BeginPopupModal("Retrain templates?", nullptr,
+	                           ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextUnformatted(
+			"Live sorting will STOP now and will not resume until Kilosort4\n"
+			"finishes retraining on the data recorded so far. On a long\n"
+			"recording this can take many minutes, and incoming data during\n"
+			"retraining is NOT sorted.\n\n"
+			"Continue?");
+		ImGui::Separator();
+		if (ImGui::Button("Retrain now", ImVec2(140, 0))) {
+			g_retrainRequested.store(true);
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Cancel", ImVec2(140, 0)))
+			ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+	// ----------------------------------------------------------------------
+
+	ImGui::Checkbox("Follow live", &m_bDriftFollow);
+
+	if (ImPlot::BeginPlot("Estimated drift over time", ImVec2(-1, -1))) {
+		ImPlot::SetupAxes("Time from start of recording (h:mm:ss)",
+		                  "Estimated drift (um)");
+
+		ImPlot::SetupAxisFormat(ImAxis_X1, DriftTimeAxisFormatter); // signed
+		const double x0 = m_vfKsDriftTimeSec.empty()
+		                  ? xs.front()
+		                  : (double)m_vfKsDriftTimeSec.front();
+		ImPlot::SetupAxisLimits(ImAxis_X1, x0, xs.back(),
+		                        m_bDriftFollow ? ImPlotCond_Always
+		                                       : ImPlotCond_Once);
+
+		if (!m_vfKsDriftTimeSec.empty()) {
+			ImPlot::PlotLine("kilosort (train)", m_vfKsDriftTimeSec.data(),
+			                 m_vfKsDrift.data(), (int)m_vfKsDrift.size());
+			float klo = lo, khi = hi;
+			for (size_t i = 0; i < m_vfKsDrift.size(); ++i) {
+				if (m_vfKsDrift[i] < klo) klo = m_vfKsDrift[i];
+				if (m_vfKsDrift[i] > khi) khi = m_vfKsDrift[i];
+			}
+			double bx[2] = { 0.0, 0.0 };
+			double by[2] = { (double)klo - 10.0, (double)khi + 10.0 };
+		}
+		ImPlot::PlotLine("live", xs.data(), ys.data(), (int)xs.size());
+		ImPlot::EndPlot();
+	}
+	ImGui::End();
+}
+
+// Reads match_baseline from oss_input/
+void OutputGuiTab::loadMatchBaseline() {
+	if (m_sOssInputDir.empty()) return;
+
+	try {
+		cnpy::NpyArray a = cnpy::npy_load(m_sOssInputDir + "match_baseline.npy");
+		if (a.shape.size() != 1 || a.word_size != sizeof(float)) return;
+		const float* d = a.data<float>();
+		m_vfMatchBaseline.assign(d, d + a.shape[0]);
+		std::cout << "[MatchBaseline] loaded " << m_vfMatchBaseline.size()
+		          << " cluster baselines from match_baseline.npy" << std::endl;
+	}
+	catch (const std::exception&) {
+		// Older oss_input: the panels fall back to raw match strength.
+		std::cout << "[MatchBaseline] match_baseline.npy not found in oss_input; "
+		             "re-run Kilosort4 to enable % of training match." << std::endl;
+	}
+}
+
+
+void OutputGuiTab::loadDriftReference() {
+	m_bDriftRefLoaded = true;   // one attempt only, success or not
+	if (m_sOssInputDir.empty()) return;
+
+	float batchSamples = 60000.0f;
+	try {
+		std::ifstream misc(m_sOssInputDir + "misc.txt");
+		std::string line;
+		while (std::getline(misc, line)) {
+			const size_t sep = line.find(':');
+			if (sep == std::string::npos) continue;
+			if (line.compare(0, sep, "batch_size") == 0) {
+				batchSamples = std::stof(line.substr(sep + 1));
+				break;
+			}
+		}
+	}
+	catch (const std::exception&) { /* keep the default */ }
+
+	try {
+		cnpy::NpyArray a = cnpy::npy_load(m_sOssInputDir + "ks_dshift.npy");
+		if (a.shape.size() != 1 || a.word_size != sizeof(float)) return;
+		const float* d = a.data<float>();
+		const size_t n = a.shape[0];
+		if (n == 0 || m_fSampRate <= 0.0f) return;
+
+		const float batchSec = batchSamples / m_fSampRate;
+		m_fKsTrainSec = (float)n * batchSec;
+
+		m_vfKsDrift.assign(d, d + n);
+		m_vfKsDriftTimeSec.resize(n);
+		for (size_t i = 0; i < n; ++i)
+			m_vfKsDriftTimeSec[i] = ((float)i - (float)n) * batchSec;
+	}
+	catch (const std::exception&) {
+		// No reference available; the live trace plots on its own.
+	}
+}
+
+void OutputGuiTab::plotProcessTimes(const ImVec2 windowCenter, bool &showProcessTimes) {
+	ImGui::SetNextWindowPos(windowCenter, ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowClass(&plotWindowClass);
+	if (!ImGui::Begin("Processing time distribution", &showProcessTimes)) { ImGui::End(); return; }
 
 	static bool	  useFullHistory = true;
 	static int	  history = 30; // Seconds
@@ -440,21 +738,24 @@ void OutputGuiTab::plotProcessTimes(const ImVec2 windowCenter, bool &showProcess
 
 	processingTimeMutex.lock();
 	int len = m_vProcessTimes.size();
-
 	int toShow = useFullHistory || (historyNBatches > len) ? len : historyNBatches;
 	int toSkip = len - toShow;
 
-	// Calculate mean
-	double mean = (double)std::reduce(m_vProcessTimes.begin() + toSkip, m_vProcessTimes.end()) / toShow;
+	double mean = 0.0, stdDev = 0.0, inTimePerc = 0.0;
+	if (toShow > 0) {
+		// Calculate mean
+		mean = (double)std::reduce(m_vProcessTimes.begin() + toSkip, m_vProcessTimes.end()) / toShow;
+		// Calculate std
+    	std::vector<double> diff(toShow);
+    	std::transform(m_vProcessTimes.begin() + toSkip, m_vProcessTimes.end(), diff.begin(), [mean](double x) { return x - mean; });
+    	double sqSum = std::inner_product(diff.begin(), diff.end(), diff.begin(), 0.0);
+    	stdDev = std::sqrt(sqSum / toShow);
 
-	// Calculate std
-	std::vector<double> diff(toShow);
-	std::transform(m_vProcessTimes.begin() + toSkip, m_vProcessTimes.end(), diff.begin(), [mean](double x) { return x - mean; });
-	double sqSum = std::inner_product(diff.begin(), diff.end(), diff.begin(), 0.0);
-	double stdDev = std::sqrt(sqSum / toShow);
 
-	double inTimeCount = std::count_if(m_vProcessTimes.begin() + toSkip, m_vProcessTimes.end(), [&](long const val) { return val < maxScanWindow; });
-	double inTimePerc = inTimeCount / toShow;
+		double inTimeCount = std::count_if(m_vProcessTimes.begin() + toSkip, m_vProcessTimes.end(), [&](long const val) { return val < maxScanWindow; });
+    	inTimePerc = inTimeCount / toShow;
+	}
+
 	processingTimeMutex.unlock();
 
 	static int bins = 50;
@@ -466,15 +767,45 @@ void OutputGuiTab::plotProcessTimes(const ImVec2 windowCenter, bool &showProcess
 
 	ImGui::Text("Mean: %.2f,  STD: %.2f, Percentage on time: %.2f", mean, stdDev, inTimePerc);
 
-	ImPlot::BeginPlot("Batch Processing Time Distribution", ImVec2(-1, -1));
-	ImPlot::SetupAxes("Time (ms)", "Density", ImPlotAxisFlags_AutoFit);
-	ImPlot::SetupLegend(ImPlotLocation_NorthEast);
-	ImPlot::SetNextFillStyle(IMPLOT_AUTO_COL, 0.5f);
-	processingTimeMutex.lock();
-	ImPlot::PlotHistogram("ProcessTimes", m_vProcessTimes.data() + toSkip, toShow, bins, false, true, ImPlotRange(0, range));
-	processingTimeMutex.unlock();
-	ImPlot::PlotVLines("Batch Size", &maxScanWindow, 1);
-	ImPlot::EndPlot();
+	static const double kYTiers[]    = { 0.15, 0.20, 0.30, 0.50, 0.80, 1.0, 1.5, 2.0 };
+	static const int    kNumYTiers   = (int)(sizeof(kYTiers) / sizeof(kYTiers[0]));
+	static int          yTier        = 0;    // index into kYTiers; 0 is the floor
+	static double       lastPeak     = 0.0;  // density peak returned by PlotHistogram last frame
+	static int          framesBelow  = 0;    // consecutive frames the peak fit the lower tier
+	const double        kFillUp      = 0.85; // step up when the peak exceeds 85% of the current tier
+	const int           kDownHold    = 120;  // ~2 s at 60 fps the peak must stay low before stepping down
+
+	// Step up immediately -- clipping is the worst outcome, so bump until the peak fits.
+	while (yTier < kNumYTiers - 1 && lastPeak > kFillUp * kYTiers[yTier]) {
+		yTier++;
+		framesBelow = 0;
+	}
+	// Step down only after the peak stays comfortably inside the next-lower tier.
+	if (yTier > 0 && lastPeak < kFillUp * kYTiers[yTier - 1]) {
+		if (++framesBelow >= kDownHold) {
+			yTier--;
+			framesBelow = 0;
+		}
+	} else {
+		framesBelow = 0;
+	}
+	const double yMax = kYTiers[yTier];
+
+
+	if (ImPlot::BeginPlot("Batch Processing Time Distribution", ImVec2(-1, -1))) {
+		ImPlot::SetupAxes("Time (ms)", "Density", ImPlotAxisFlags_None, ImPlotAxisFlags_None);
+		ImPlot::SetupAxisLimits(ImAxis_X1, 0, range, ImPlotCond_Always);
+		ImPlot::SetupAxisLimits(ImAxis_Y1, 0, yMax, ImPlotCond_Always);
+		ImPlot::SetupLegend(ImPlotLocation_NorthEast);
+		ImPlot::SetNextFillStyle(ImVec4(0.867f, 0.518f, 0.322f, 1.0f), 0.5f); // Set color to orange
+		processingTimeMutex.lock();
+		lastPeak = ImPlot::PlotHistogram("ProcessTimes", m_vProcessTimes.data() + toSkip, toShow, bins, false, true, ImPlotRange(0, range));
+		processingTimeMutex.unlock();
+		ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(0.0f, 0.0f, 0.0f, 1.0f)); // black
+		ImPlot::PlotVLines("Batch Size", &maxScanWindow, 1);
+		ImPlot::PopStyleColor();
+		ImPlot::EndPlot();
+	}
 	ImGui::End();
 }
 
@@ -523,6 +854,7 @@ Neuron::Neuron(int number)
 	, m_vfSpikeRate()
 	, m_SpikeRate(0)
 	, spikeTimeMutex()
+	, m_lLastScoreSampleCt(-1)
 {
 };
 
@@ -546,13 +878,15 @@ void Neuron::Update(OutputGuiTab* outputGUI) {
 	static std::thread CrossCorrThread;
 
 	if (IsSelected() == true) {
-		ImGui::SetNextWindowSize(ImVec2(400, 600), ImGuiCond_Once);
+		ImGui::SetNextWindowSize(ImVec2(400, 600), ImGuiCond_FirstUseEver);
 
-		//Begin widget
-		std::string txt = "Spike " + std::to_string(m_inumber) + " Stats";
-		ImGui::Begin(txt.c_str(), &m_bSelected);
+		if (g_spikeStatsDockNode != 0)
+			ImGui::SetNextWindowDockID(g_spikeStatsDockNode, ImGuiCond_Always);
 
-		txt = " FR: " + std::_Floating_to_string("%.2f", GetSpikeRate()) + "Hz, nSpikes: " + std::to_string(GetTotSpikeCount());
+		std::string txt = "Neuron " + std::to_string(m_inumber) + " Stats";
+		if (!ImGui::Begin(txt.c_str(), &m_bSelected)) { ImGui::End(); return; }
+
+		txt = " FR: " + formatFixed2(GetSpikeRate()) + "Hz, nSpikes: " + std::to_string(GetTotSpikeCount());
 		ImGui::Text(txt.c_str());
 
 		if (ImGui::CollapsingHeader("Firing rate Plot"))
@@ -563,6 +897,12 @@ void Neuron::Update(OutputGuiTab* outputGUI) {
 
 		if (ImGui::CollapsingHeader("ISI Histogram"))
 			plotISI();
+
+		if (ImGui::CollapsingHeader("Match Score")) {
+			const std::vector<float>& mb = outputGUI->m_vfMatchBaseline;
+			plotMatchScore((m_inumber >= 0 && m_inumber < (int)mb.size())
+			               ? mb[m_inumber] : -1.0f);
+		}
 
 		//if (ImGui::CollapsingHeader("PST Histogram"))
 		//	plotPSTHs(outputGUI->eventTimes, outputGUI->eventLabels, outputGUI->m_fSampRate);
@@ -1092,6 +1432,60 @@ void Neuron::AddSpikeAmplitude(float amp) {
 	m_vfSpikeAmplitude.push_back(amp);
 }
 
+// Rolling median of the matching-pursuit match score over the last 30 s.
+static const float MATCH_WINDOW_SEC   = 30.0f; // rolling median width
+static const float MATCH_SAMPLE_SEC   = 1.0f;
+
+void Neuron::AddMatchScore(float score, long timeSamples, float sampRate) {
+	if (sampRate <= 0.0f) return;
+	std::lock_guard<std::mutex> lk(scoreMutex);
+
+	m_dqScoreWin.emplace_back(timeSamples, score);
+	if (m_lFirstScoreCt < 0) m_lFirstScoreCt = timeSamples;
+	m_lLastScoreSpikeCt = timeSamples;
+
+	const long windowSamples = (long)(MATCH_WINDOW_SEC * sampRate);
+	while (!m_dqScoreWin.empty() &&
+	       timeSamples - m_dqScoreWin.front().first > windowSamples) {
+		m_dqScoreWin.pop_front();
+	}
+
+
+	if (timeSamples - m_lFirstScoreCt < windowSamples) return;
+
+	const long sampleStride = (long)(MATCH_SAMPLE_SEC * sampRate);
+	if (m_lLastScoreSampleCt >= 0 && timeSamples - m_lLastScoreSampleCt < sampleStride)
+		return;
+	m_lLastScoreSampleCt = timeSamples;
+
+	if (m_dqScoreWin.empty()) return;
+
+	std::vector<float> s;
+	s.reserve(m_dqScoreWin.size());
+	for (const auto& p : m_dqScoreWin) s.push_back(p.second);
+	const size_t mid = s.size() / 2;
+	std::nth_element(s.begin(), s.begin() + mid, s.end());
+	float median = s[mid];
+	if (s.size() % 2 == 0) {
+		const float lo = *std::max_element(s.begin(), s.begin() + mid);
+		median = 0.5f * (median + lo);
+	}
+
+	m_vfScoreMedian.push_back(median);
+	m_vfScoreTimeSec.push_back((float)(timeSamples / (double)sampRate));
+	m_fScoreCurrent = median;
+}
+
+float Neuron::CurrentMatchScore(long nowSampleCt, float sampRate) {
+	std::lock_guard<std::mutex> lk(scoreMutex);
+	if (m_fScoreCurrent <= 0.0f || m_lLastScoreSpikeCt < 0 || sampRate <= 0.0f)
+		return -1.0f;
+	const long windowSamples = (long)(MATCH_WINDOW_SEC * sampRate);
+	if (nowSampleCt - m_lLastScoreSpikeCt > windowSamples)
+		return -1.0f;   // silent for a whole window: its last value is stale
+	return m_fScoreCurrent;
+}
+
 void Neuron::SetChanNum(int Channum) {
 	m_iChannumber = Channum;
 }
@@ -1154,4 +1548,189 @@ void Neuron::CalcSpikeRate(long *streamSampleCount, long TimeWindow, float Sampl
 		m_SpikeRate = count / TimeWindowSecs;
 	}
 
+}
+
+
+// ---------------------------------------------------------------------------
+// Population match quality
+
+void OutputGuiTab::updatePopulationMatch() {
+	if (m_fSampRate <= 0.0f) return;
+
+	const long stride = (long)(1.0f * m_fSampRate); 
+	if (m_lLastPopSampleCt >= 0 && streamSampleCt - m_lLastPopSampleCt < stride)
+		return;
+	m_lLastPopSampleCt = streamSampleCt;
+
+	if (m_vfMatchBaseline.empty()) return;
+
+	std::vector<float> ratios;
+	ratios.reserve(m_lT);
+	int below = 0;
+	int silent = 0;
+	for (int i = 0; i < m_lT; ++i) {
+		if (i >= (int)m_vfMatchBaseline.size()) break;
+		const float base = m_vfMatchBaseline[i];
+		if (base <= 0.0f) continue;
+		bool everScored;
+		{
+			std::lock_guard<std::mutex> lk(m_bNeurons[i]->scoreMutex);
+			everScored = m_bNeurons[i]->m_fScoreCurrent > 0.0f;
+		}
+		if (!everScored) continue;  // nothing
+		const float cur = m_bNeurons[i]->CurrentMatchScore(streamSampleCt, m_fSampRate);
+		if (cur <= 0.0f) { ++silent; continue; }
+		const float r = 100.0f * cur / base;
+		ratios.push_back(r);
+		if (r < 85.0f) ++below;
+	}
+
+	std::lock_guard<std::mutex> lk(popMatchMutex);
+	m_iPopContributing = (int)ratios.size();
+	m_iPopBelow85 = below;
+	m_iPopSilent = silent;
+	if (ratios.empty()) return;
+
+	std::nth_element(ratios.begin(), ratios.begin() + ratios.size() / 2, ratios.end());
+	const float median = ratios[ratios.size() / 2];
+
+	m_vfPopMatchPct.push_back(median);
+	m_vfPopMatchTimeSec.push_back((float)(streamSampleCt / (double)m_fSampRate));
+}
+
+
+void OutputGuiTab::plotMatchScores(const ImVec2 windowCenter, bool &showMatchScores) {
+	ImGui::SetNextWindowPos(windowCenter, ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(560, 380), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowClass(&plotWindowClass);
+	if (!ImGui::Begin("Match quality", &showMatchScores)) { ImGui::End(); return; }
+
+	std::vector<float> xs, ys;
+	int contributing, below, silent;
+	{
+		std::lock_guard<std::mutex> lk(popMatchMutex);
+		xs = m_vfPopMatchTimeSec;
+		ys = m_vfPopMatchPct;
+		contributing = m_iPopContributing;
+		below = m_iPopBelow85;
+		silent = m_iPopSilent;
+	}
+
+	if (ys.empty()) {
+		ImGui::TextUnformatted("Waiting for spikes (or: no match_baseline.npy in oss_input -- re-run Kilosort4)");
+		ImGui::End();
+		return;
+	}
+
+	ImGui::SetNextItemWidth(160.0f);
+	ImGui::InputInt("History (s)##pop", &m_iMatchHistorySec, 60, 300);
+	if (m_iMatchHistorySec < 60) m_iMatchHistorySec = 60;
+
+	const float current = ys.back();
+	if (current < 90.0f)
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
+	ImGui::Text("Population match: %.0f%% of training", current);
+	if (current < 90.0f)
+		ImGui::PopStyleColor();
+	ImGui::SameLine();
+	ImGui::TextDisabled("(%d units tracked, %d below 85%%, %d silent >30 s)",
+	                    contributing, below, silent);
+
+	const float tMax = xs.back();
+	float tLo = tMax - (float)m_iMatchHistorySec;
+	if (tLo < 0.0f) tLo = 0.0f;
+	ImPlot::SetNextAxisLimits(ImAxis_X1, tLo, (tMax > tLo) ? tMax : tLo + 1.0f,
+	                          ImPlotCond_Always);
+
+	if (ImPlot::BeginPlot("##popmatch", ImVec2(-1, -1))) {
+		ImPlot::SetupAxes("Time from start of recording (h:mm:ss)",
+		                  "Median match strength");
+		ImPlot::SetupAxisFormat(ImAxis_X1, RasterTimeAxisFormatter);
+		ImPlot::SetupLegend(ImPlotLocation_North,
+		                    ImPlotLegendFlags_Outside | ImPlotLegendFlags_Horizontal);
+
+		double hundred = 100.0;
+		ImPlot::SetNextLineStyle(ImVec4(0.0f, 0.0f, 0.0f, 1.0f), 2.5f);
+		ImPlot::PlotHLines("training match", &hundred, 1);
+
+		ImPlot::SetNextLineStyle(ImVec4(0.10f, 0.35f, 0.85f, 1.0f), 2.5f);
+		ImPlot::PlotLine("population median", xs.data(), ys.data(), (int)xs.size());
+
+		ImPlot::EndPlot();
+	}
+
+	ImGui::TextDisabled("Median over firing units of (live 30 s median match strength / that unit's training median).");
+	ImGui::End();
+}
+
+// per-neuron score
+void Neuron::plotMatchScore(float trainingBaseline) {
+
+	std::vector<float> xs, ys;
+	{
+		std::lock_guard<std::mutex> lk(scoreMutex);
+		xs = m_vfScoreTimeSec;
+		ys = m_vfScoreMedian;
+	}
+
+	if (ys.empty()) {
+		ImGui::TextUnformatted("No match scores yet for this unit");
+		return;
+	}
+
+	ImGui::SetNextItemWidth(160.0f);
+	ImGui::InputInt("History (s)##match", &m_iMatchHistorySec, 30, 120);
+	if (m_iMatchHistorySec < 30) m_iMatchHistorySec = 30;
+
+	const float current = ys.back();
+	const bool haveBaseline = (trainingBaseline > 0.0f);
+	const float pct = haveBaseline ? 100.0f * current / trainingBaseline : 0.0f;
+
+	if (haveBaseline) {
+		if (pct < 85.0f)
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
+		ImGui::Text("%.0f%% of training match", pct);
+		if (pct < 85.0f)
+			ImGui::PopStyleColor();
+		ImGui::SameLine();
+		ImGui::TextDisabled("(live %.2f, training %.2f)", current, trainingBaseline);
+	}
+	else {
+		ImGui::Text("live match strength %.2f", current);
+		ImGui::SameLine();
+		ImGui::TextDisabled("(no training baseline -- re-run Kilosort4)");
+	}
+
+	// plot
+	float plotH = ImGui::GetContentRegionAvail().y - 30.0f;
+	if (plotH < 260.0f) plotH = 260.0f;
+	if (plotH > 420.0f) plotH = 420.0f;
+
+	const float tMax = xs.back();
+	float tLo = tMax - (float)m_iMatchHistorySec;
+	if (tLo < 0.0f) tLo = 0.0f;
+	ImPlot::SetNextAxisLimits(ImAxis_X1, tLo, (tMax > tLo) ? tMax : tLo + 1.0f,
+	                          ImPlotCond_Always);
+
+	if (ImPlot::BeginPlot("##matchscore", ImVec2(-1, plotH))) {
+		ImPlot::SetupAxes("Time from start of recording (h:mm:ss)",
+		                  "Match strength");
+		ImPlot::SetupAxisFormat(ImAxis_X1, RasterTimeAxisFormatter);
+		// Setup the legend OUTSIDE the plot area.
+		ImPlot::SetupLegend(ImPlotLocation_North,
+		                    ImPlotLegendFlags_Outside | ImPlotLegendFlags_Horizontal);
+
+		if (haveBaseline) {
+			double b = trainingBaseline;
+			ImPlot::SetNextLineStyle(ImVec4(0.0f, 0.0f, 0.0f, 1.0f), 2.5f);
+			ImPlot::PlotHLines("training baseline", &b, 1);
+		}
+
+		ImPlot::SetNextLineStyle(ImVec4(0.10f, 0.35f, 0.85f, 1.0f), 2.5f);   // blue
+		ImPlot::PlotLine("30 s median", xs.data(), ys.data(), (int)xs.size());
+
+		ImPlot::EndPlot();
+	}
+
+	//ImGui::TextDisabled("Black line = how well Kilosort matched this unit on the training recording.");
 }

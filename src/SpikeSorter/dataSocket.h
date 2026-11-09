@@ -2,6 +2,8 @@
 #define DATA_SOCKET_H_
 
 #include <mutex>
+#include <string>
+#include <map>
 
 #include "../../External/sglx/SglxApi.h"
 
@@ -18,6 +20,16 @@ struct OSSSpecificParams {
 	long lNChans;
 	std::vector<int> vImecChannels;
 	int substream;
+};
+
+// Snapshot of save state when retraining templates
+struct RetrainSaveInfo {
+	bool        saving = false;    // is SpikeGLX writing to disk?
+	std::string dataDir;
+	std::string runName;
+	t_ull       fileStart = 0;
+	t_ull       sampleCount = 0;   // from run start
+	std::map<std::string, std::string> params; // sglx_getParams: g/t indices, etc.
 };
 
 class DataSocket
@@ -38,11 +50,14 @@ public:
 	virtual bool   startRun() { return true; };
 	virtual bool   stopRun() { return true; };
 
+	// For drift retrain
+	virtual bool   getSaveInfo(RetrainSaveInfo& /*info*/, OSSSpecificParams /*osParams*/) { return false; }
+	virtual bool   finalizeRecording() { return false; }
+
 	virtual void   waitUntil(t_ull lCt, OSSSpecificParams osParams) {};
 
 protected:
 	// Short vector data buffers
-	std::vector<short>	m_sFetchBuffer;
 	std::vector<short>	m_sNidqBuffer;
 
 	// Max and min window size
@@ -76,6 +91,9 @@ public:
 	bool   isRunning();
 	bool   startRun();
 	bool   stopRun();
+
+	bool   getSaveInfo(RetrainSaveInfo& info, OSSSpecificParams osParams);
+	bool   finalizeRecording();
 
 	void   waitUntil(t_ull lWaitUntilCt, OSSSpecificParams osParams);
 

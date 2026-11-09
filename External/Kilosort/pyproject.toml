@@ -1,0 +1,40 @@
+# Kilosort 4.0.13, modified for Live Spike Sorter.
+#
+# This is upstream Kilosort 4.0.13 with a small patch (io.py, run_kilosort.py,
+# template_matching.py, clustering_qr.py, gui/sorter.py) that saves extra
+# intermediate tensors -- Wall3.npy, ctc.npy, wPCA.npy, imap.npy and
+# cluster_centroids.npy -- into the Kilosort results directory. LSS loads those
+# at run time; upstream Kilosort does not write them.
+#
+# Installed via `pip install -r requirements.txt` from the repo root.
+# Dependencies below are copied verbatim from upstream 4.0.13's metadata.
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kilosort"
+version = "4.0.13"
+description = "Kilosort 4.0.13 patched for Live Spike Sorter (exports extra intermediate tensors)."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.20.0,<2.0.0",
+    "scipy",
+    "scikit-learn",
+    "tqdm",
+    "torch>=1.6",
+    "numba",
+    "faiss-cpu",
+]
+
+[project.optional-dependencies]
+gui = ["pyqtgraph>=0.13.0", "qtpy", "pyqt6", "pyqt6.sip", "matplotlib"]
+
+[tool.setuptools.packages.find]
+include = ["kilosort*"]
+
+[tool.setuptools.package-data]
+kilosort = ["*.npz"]

@@ -12,9 +12,13 @@
 
 #include "SpikeSorter/dataSocket.h" // for decoder to access getStreamSampleCt()
 
+#include "Helpers/RetrainSignal.h" //drift retrain
+
 #include <npp.h> // to get the number of GPU devices
+std::atomic<bool> g_retrainRequested{ false };
 
 #include <algorithm>
+#include <map>
 #include <sstream>
 
 //Check if we are not in the .exe folder. A bit ugly, but it works
@@ -79,6 +83,9 @@ void runSorter(sockaddr_in mainAddr, InputParameters params, DataSocket** &mNC) 
 			ossParams.uSelectedDevice = deviceIndex;
 			ossParams.sInputFolder = params.mapDeviceFilePaths[deviceIndex];
 			ossParams.sOSSOutputFolder = params.mapOSSOutputFolders[deviceIndex];
+			auto sub = params.mapDeviceSubstreams.find(deviceIndex);
+			ossParams.iSubstream = (sub != params.mapDeviceSubstreams.end()) ? sub->second : params.iSubstream;
+			std::cout << "GPU " << deviceIndex << " sorts imec" << ossParams.iSubstream << std::endl;
 			std::cout << "Setting LSS output folder to " << params.mapOSSOutputFolders[deviceIndex];
 			std::thread ossThread = std::thread(runOSSParallel, mainAddr, ossParams, sharedSocket);
 			ossThread.detach();
@@ -103,6 +110,22 @@ void runDecoder(Sock &mainServer, std::vector<sockaddr_in> sorterImecAddrs, std:
 
 	// Start up Decoder
 	Decoder decoder(sorterImecAddrs, sorterNidqAddrs, guiAddr, params, mNC);
+}
+
+static const char* legacySdmParamKey(const std::string& flag) {
+	static const std::map<std::string, const char*> table = {
+		{ "--sdm_trigger_z", "trigger_z" },           { "--sdm_baseline_min_seconds", "baseline_min_seconds" },
+		{ "--sdm_mode", "mode" },                     { "--sdm_offset", "offset" },
+		{ "--sdm_offset_fs_low", "fs_offset_low" },   { "--sdm_offset_fs_high", "fs_offset_high" },
+		{ "--sdm_offset_rs_low", "rs_offset_low" },   { "--sdm_offset_rs_high", "rs_offset_high" },
+		{ "--sdm_trigger_z_fs_low", "fs_z_low" },     { "--sdm_trigger_z_fs_high", "fs_z_high" },
+		{ "--sdm_trigger_z_rs_low", "rs_z_low" },     { "--sdm_trigger_z_rs_high", "rs_z_high" },
+		{ "--sdm_stats", "stats_path" },              { "--sdm_rs_fs", "rs_fs_path" },
+		{ "--sdm_spikes_file", "spikes_file" },       { "--sdm_event_file", "event_file" },
+		{ "--sdm_decoder_work_folder", "work_folder" }, { "--sdm_decoder_window_ms", "window_ms" },
+	};
+	auto it = table.find(flag);
+	return it == table.end() ? nullptr : it->second;
 }
 
 InputParameters parseCmdArgs(int argc, char* argv[]) {
@@ -165,20 +188,6 @@ InputParameters parseCmdArgs(int argc, char* argv[]) {
 				cmdLineParams.vSdmActivitySubset.push_back(std::stol(item));
 			}
 		}
-		else if (arg == "--sdm_trigger_z") {
-			if (i + 1 >= argc) {
-				std::cout << "Must supply float after --sdm_trigger_z" << std::endl;
-				exit(EXIT_SUCCESS);
-			}
-			cmdLineParams.sdmTriggerZ = std::stof(argv[i + 1]);
-		}
-		else if (arg == "--sdm_baseline_min_seconds") {
-			if (i + 1 >= argc) {
-				std::cout << "Must supply float after --sdm_baseline_min_seconds" << std::endl;
-				exit(EXIT_SUCCESS);
-			}
-			cmdLineParams.sdmBaselineMinSeconds = std::stof(argv[i + 1]);
-		}
 		else if (arg == "--sdm_trigger_bin_ms") {
 			if (i + 1 >= argc) {
 				std::cout << "Must supply int after --sdm_trigger_bin_ms" << std::endl;
@@ -188,39 +197,89 @@ InputParameters parseCmdArgs(int argc, char* argv[]) {
 		}
 		else if (arg == "--sdm_processor") {
 			if (i + 1 >= argc) {
-				std::cout << "Must supply type (zscore|logreg|bincounts) after --sdm_processor" << std::endl;
+				std::cout << "Must supply a processor name (e.g. zscore) after --sdm_processor" << std::endl;
 				exit(EXIT_SUCCESS);
 			}
 			cmdLineParams.sdmProcessorType = argv[i + 1];
 			std::cout << "SDM processor type: " << cmdLineParams.sdmProcessorType << std::endl;
 		}
-		else if (arg == "--sdm_spikes_file") {
-			if (i + 1 >= argc) {
-				std::cout << "Must supply file path after --sdm_spikes_file" << std::endl;
-				exit(EXIT_SUCCESS);
+		else if (arg == "--sdm_param") {
+			int j = i + 1;
+			for (; j < argc && std::string(argv[j]).rfind("--", 0) != 0; ++j) {
+				const std::string kv = argv[j];
+				const size_t eq = kv.find('=');
+				if (eq == std::string::npos || eq == 0) {
+					std::cout << "Ignoring malformed --sdm_param '" << kv << "' (expected key=value)" << std::endl;
+					continue;
+				}
+				cmdLineParams.mapSdmParams[kv.substr(0, eq)] = kv.substr(eq + 1);
 			}
-			cmdLineParams.sSdmSpikesFile = argv[i + 1];
+			i = j - 1;
 		}
-		else if (arg == "--sdm_event_file") {
+		else if (legacySdmParamKey(arg) != nullptr) {
 			if (i + 1 >= argc) {
-				std::cout << "Must supply file path after --sdm_event_file" << std::endl;
+				std::cout << "Must supply a value after " << arg << std::endl;
 				exit(EXIT_SUCCESS);
 			}
-			cmdLineParams.sSdmEventFile = argv[i + 1];
+			cmdLineParams.mapSdmParams[legacySdmParamKey(arg)] = argv[i + 1];
 		}
-		else if (arg == "--sdm_decoder_work_folder") {
+		else if (arg == "--sglx_host") {
 			if (i + 1 >= argc) {
-				std::cout << "Must supply folder path after --sdm_decoder_work_folder" << std::endl;
+				std::cout << "Must supply IP address after --sglx_host" << std::endl;
 				exit(EXIT_SUCCESS);
 			}
-			cmdLineParams.sSdmDecoderWorkFolder = argv[i + 1];
+			cmdLineParams.sDataAccquisitionHost = argv[i + 1];
 		}
-		else if (arg == "--sdm_decoder_window_ms") {
+		else if (arg == "--sglx_port") {
 			if (i + 1 >= argc) {
-				std::cout << "Must supply int after --sdm_decoder_window_ms" << std::endl;
+				std::cout << "Must supply port number after --sglx_port" << std::endl;
 				exit(EXIT_SUCCESS);
 			}
-			cmdLineParams.sdmDecoderWindowMs = std::stoi(argv[i + 1]);
+			cmdLineParams.uDataAccquisitionPort = static_cast<uint16>(std::stoi(argv[i + 1]));
+		}
+		else if (arg == "--spike_stream") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply host:port after --spike_stream" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.sSpikeStreamAddr = argv[i + 1];
+		}
+		else if (arg == "--max_lag_ms") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply a number of milliseconds after --max_lag_ms" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.iTimeBehind = std::stoi(argv[i + 1]);
+		}
+		else if (arg == "--small_skip") {
+			cmdLineParams.bSmallskip = true;
+		}
+		else if (arg == "--no_input_gui") {
+			cmdLineParams.bSkipInputGui = true;
+		}
+		else if (arg == "--drift_estimation") {
+			cmdLineParams.bDriftEstimation = true;
+		}
+		else if (arg == "--drift_window_s") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply a number of seconds after --drift_window_s" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.fDriftWindowSeconds = static_cast<float>(std::stof(argv[i + 1]));
+		}
+		else if (arg == "--drift_max_shift_um") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply a shift in microns after --drift_max_shift_um" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.fDriftMaxShiftUm = static_cast<float>(std::stof(argv[i + 1]));
+		}
+		else if (arg == "--drift_retrain_threshold_um") {
+			if (i + 1 >= argc) {
+				std::cout << "Must supply a shift in microns after --drift_retrain_threshold_um" << std::endl;
+				exit(EXIT_SUCCESS);
+			}
+			cmdLineParams.fDriftRetrainThresholdUm = static_cast<float>(std::stof(argv[i + 1]));
 		}
 	}
 	
@@ -294,6 +353,16 @@ InputParameters parseCmdArgs(int argc, char* argv[]) {
 				}
 
 				cmdLineParams.mapSpikeFiles[cmdLineParams.vSelectedDevices[j]] = argv[i + j + 1];
+			}
+		}
+		else if (arg == "--substream") {
+			for (int j = 0; j < cmdLineParams.vSelectedDevices.size(); j++) {
+				std::string val = (i + j + 1 < argc) ? argv[i + j + 1] : "--";
+				if (val.length() >= 2 && val.substr(0, 2) == "--") {
+					std::cout << "Not enough values provided for --substream compared to --n_gpus. Remaining sorters read imec0." << std::endl;
+					break;
+				}
+				cmdLineParams.mapDeviceSubstreams[cmdLineParams.vSelectedDevices[j]] = std::stoi(val);
 			}
 		}
 		else if (arg == "--cuda_output_dir") {

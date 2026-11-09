@@ -1,0 +1,24 @@
+# Live Spike Sorter -- Python 3.10 environment.
+#
+#   python -m venv venv
+#   venv\Scripts\activate
+#   pip install -r requirements.txt
+
+
+--extra-index-url https://download.pytorch.org/whl/cu113
+torch==1.12.0+cu113
+
+
+# Kilosort 4.0.13, patched for LSS.
+# This REPLACES `pip install kilosort
+./External/Kilosort
+
+
+# Used by the launcher and the offline analysis scripts.
+matplotlib
+h5py
+spikeinterface
+probeinterface
+pyqtgraph
+PyQt5
+qtpy

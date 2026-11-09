@@ -1,6 +1,5 @@
 import numpy as np
 import os
-import matplotlib.pyplot as plt
 import statistics
 from pathlib import Path
 import heapq
